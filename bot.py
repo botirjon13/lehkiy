@@ -98,7 +98,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="Markdown")
 
 # Handle main keyboard buttons
-@dp.message(Text(equals="➕ Добавить товар"))
+@dp.message_handler(lambda message: message.text == "➕ Добавить товар")
 async def start_add(message: types.Message, state: FSMContext):
     await state.set_state(AddProductStates.waiting_for_input)
     await message.answer("Отправь товар в формате: название, количество, цена или просто пришли название и мы спросим дальше.", parse_mode="Markdown")
