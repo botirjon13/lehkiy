@@ -13,7 +13,7 @@ ADMIN_ID = 1262207928  # ваш ID для уведомлений
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-DATABASE_URL = "postgresql://user:password@localhost/dbname"
+DATABASE_URL = "postgresql://postgres:CHLLglOdBiZEuGZUcfyhYwfTDoxhklIe@yamanote.proxy.rlwy.net:53203/railway"
 
 db_pool = None
 
