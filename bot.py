@@ -3,10 +3,13 @@ import asyncio
 import io
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.filters import Command, Text
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton, FSInputFile, ContentType
+)
 from fpdf import FPDF
-from db import connect_db, create_tables
+from db import connect_db, create_tables  # Предполагаемая ваша БД-логика
+from aiogram.types.message import ContentTypes
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
@@ -14,201 +17,156 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
+# Клавиатуры
+request_contact_btn = KeyboardButton(text="Рақамимни юбориш", request_contact=True)
+register_kb = ReplyKeyboardMarkup(keyboard=[[request_contact_btn]], resize_keyboard=True)
+
 admin_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Добавить товар")],
-        [KeyboardButton(text="Список товаров")],
-        [KeyboardButton(text="Оформить продажу")]
+        [KeyboardButton(text="Маҳсулот қўшиш")],
+        [KeyboardButton(text="Маҳсулотлар рўйхати")],
+        [KeyboardButton(text="Сотувни амалга ошириш")],
+        [KeyboardButton(text="Ҳисоботлар")]
     ],
     resize_keyboard=True
 )
+
 client_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="Мои заказы")]],
+    keyboard=[[KeyboardButton(text="Менинг буюртмаларим")]],
     resize_keyboard=True
 )
 
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
+# Регистрация клиента с подтверждением контакта
 @dp.message(Command("start"))
-async def start(message: types.Message):
+async def start_handler(message: types.Message):
     conn = await connect_db()
-    await create_tables(conn)
-
-    await conn.execute(
-        "INSERT INTO clients (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-        message.from_user.id, message.from_user.username or ""
-    )
+    client = await conn.fetchrow("SELECT id FROM clients WHERE id=$1", message.from_user.id)
+    if client:
+        if is_admin(message.from_user.id):
+            await message.answer("Хуш келибсиз, админ!", reply_markup=admin_kb)
+        else:
+            await message.answer("Ассалому алайкум! Рақамингизни юборишингиз лозим.", reply_markup=register_kb)
+    else:
+        await message.answer("Ассалому алайкум! Илтимос, рақамингизни юборинг.", reply_markup=register_kb)
     await conn.close()
 
-    if is_admin(message.from_user.id):
-        await message.answer("Добро пожаловать, админ!", reply_markup=admin_kb)
+@dp.message(content_types=ContentType.CONTACT)
+async def contact_handler(message: types.Message):
+    if message.contact and message.contact.user_id == message.from_user.id:
+        conn = await connect_db()
+        await conn.execute(
+            "INSERT INTO clients (id, username, phone) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET phone = EXCLUDED.phone",
+            message.from_user.id,
+            message.from_user.username,
+            message.contact.phone_number
+        )
+        await conn.close()
+        await message.answer("Рақамингиз муваффақиятли сақланди! Энди сиз маҳсулотлардан фойдаланишингиз мумкин.", reply_markup=client_kb)
     else:
-        await message.answer("Привет! Нажми кнопку ниже, чтобы посмотреть свои заказы.", reply_markup=client_kb)
+        await message.answer("Илтимос, ўз рақамингизни юборинг.")
 
+# Пример добавления товара (для админа)
+@dp.message(Text(text="Маҳсулот қўшиш"))
+async def add_product(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Фақат админга рухсат берилади.")
+        return
+    await message.answer("Илтимос, маҳсулот номини ва нархини қуйидаги форматда юборинг:\nНоми;Нарх\nМисол: Мазали нон;12000")
+
+@dp.message()
+async def process_product_info(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    if ";" in message.text:
+        try:
+            name, price = message.text.split(";")
+            price = float(price)
+            conn = await connect_db()
+            await conn.execute(
+                "INSERT INTO products (name, price) VALUES ($1, $2)",
+                name.strip(), price
+            )
+            await conn.close()
+            await message.answer(f"Маҳсулот '{name.strip()}' нархи {price} сўм билан қўшилди.")
+        except Exception as e:
+            await message.answer("Маълумот нотўғри форматда ёзилган ёки бошқа хатолик. Қайта уриниб кўринг.")
+    else:
+        pass  # Можно добавить другие обработчики
+
+# Оформление продажи (админ)
+@dp.message(Text(text="Сотувни амалга ошириш"))
+async def start_sale(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Фақат админга рухсат берилади.")
+        return
+    await message.answer("Илтимос, сотув учун мижознинг Telegram ID ни киритинг:")
+
+    # Запускаем состояние FSM, чтобы далее обрабатывать ID клиента, товары и т.п.
+    # Здесь для упрощения сделаем простой запрос в несколько шагов (можно расширить с FSM)
+
+# Обработка фото чека от админа или клиента
+@dp.message(content_types=ContentType.PHOTO)
+async def handle_check_photo(message: types.Message):
+    # Сохраняем фото
+    file_id = message.photo[-1].file_id  # Самое большое фото
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+    saved_path = f"./checks/{file_id}.jpg"
+
+    # Создаем папку, если нет
+    os.makedirs("checks", exist_ok=True)
+
+    await bot.download_file(file_path, saved_path)
+
+    await message.answer("Чек расми сақланди.")
+
+    # Отправим фото клиенту и админу (если нужно)
+    await bot.send_photo(ADMIN_ID, photo=file_id, caption="Янги чек расми қабул қилинди.")
+    await message.answer_photo(photo=file_id, caption="Сизнинг чек расмингиз қабул қилинди.")
+
+# Генерация отчётов (простой пример)
+@dp.message(Text(text="Ҳисоботлар"))
+async def reports(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Фақат админга рухсат берилади.")
+        return
+
+    conn = await connect_db()
+    total_sales = await conn.fetchval("SELECT SUM(total_amount) FROM sales")
+    sales_count = await conn.fetchval("SELECT COUNT(*) FROM sales")
+
+    await message.answer(f"Жами сотувлар сони: {sales_count}\nЖами даромад: {total_sales} сўм")
+
+    await conn.close()
+
+# Пример генерации PDF чека
 def generate_pdf_check(client_name: str, products_list: list, date: datetime) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, f"Чек для клиента: {client_name}", ln=1)
-    pdf.cell(0, 10, f"Дата: {date.strftime('%Y-%m-%d %H:%M')}", ln=1)
+    pdf.cell(0, 10, f"Харидор: {client_name}", ln=1)
+    pdf.cell(0, 10, f"Сана: {date.strftime('%Y-%m-%d %H:%M')}", ln=1)
     pdf.ln(5)
+
     total = 0
-    for p in products_list:
-        name = p['name']
-        price = p['price']
-        pdf.cell(0, 10, f"{name} — {price} ₽", ln=1)
-        total += float(price)
+    for product in products_list:
+        name = product['name']
+        qty = product.get('quantity', 1)
+        price = product['price']
+        pdf.cell(0, 10, f"{name} — {qty} × {price} сўм", ln=1)
+        total += price * qty
+
     pdf.ln(5)
-    pdf.cell(0, 10, f"Итого: {total} ₽", ln=1)
+    pdf.cell(0, 10, f"Жами: {total} сўм", ln=1)
 
-    buf = io.BytesIO()
-    pdf.output(buf)
-    buf.seek(0)
-    return buf.read()
-
-@dp.message()
-async def handle_buttons(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text
-
-    if is_admin(user_id):
-        # Админские кнопки
-        if text == "Добавить товар":
-            await message.answer("Введите название и цену через запятую, например: Товар, 100")
-            dp.message.register(handle_add_product, lambda msg: msg.from_user.id == ADMIN_ID)
-            return
-
-        if text == "Список товаров":
-            conn = await connect_db()
-            rows = await conn.fetch("SELECT id, name, price FROM products")
-            await conn.close()
-            if not rows:
-                await message.answer("Список товаров пуст.")
-            else:
-                s = "\n".join([f"{row['id']}: {row['name']} — {row['price']} ₽" for row in rows])
-                await message.answer("Товары:\n" + s)
-            return
-
-        if text == "Оформить продажу":
-            await message.answer("Введите ID клиента (число):")
-            dp.message.register(handle_sell_client, lambda msg: msg.from_user.id == ADMIN_ID)
-            return
-
-    # Для клиента
-    if text == "Мои заказы":
-        await handle_my_orders(message)
-        return
-
-async def handle_add_product(message: types.Message):
-    text = message.text.strip()
-    if "," not in text:
-        await message.answer("Неверный формат, используйте: Название, цена")
-        return
-    name, price_str = map(str.strip, text.split(",", 1))
-    try:
-        price = float(price_str)
-    except:
-        await message.answer("Цена должна быть числом")
-        return
-
-    conn = await connect_db()
-    await conn.execute("INSERT INTO products(name, price) VALUES ($1, $2)", name, price)
-    await conn.close()
-    await message.answer(f"Товар добавлен: {name} — {price} ₽")
-    dp.message.unregister(handle_add_product)
-
-async def handle_sell_client(message: types.Message):
-    try:
-        client_id = int(message.text.strip())
-    except:
-        await message.answer("Некорректный ID клиента")
-        return
-    # Проверяем клиента
-    conn = await connect_db()
-    client = await conn.fetchrow("SELECT id FROM clients WHERE id = $1", client_id)
-    if not client:
-        await message.answer("Клиент не найден")
-        await conn.close()
-        return
-    await conn.close()
-
-    await message.answer("Введите через запятую ID товаров, например: 1,2")
-    dp.message.register(lambda m: handle_sell_products(m, client_id), lambda msg: msg.from_user.id == ADMIN_ID)
-    dp.message.unregister(handle_sell_client)
-
-async def handle_sell_products(message: types.Message, client_id: int):
-    parts = message.text.strip().split(",")
-    product_ids = []
-    for p in parts:
-        try:
-            pid = int(p.strip())
-        except:
-            await message.answer(f"Неверный ID товара: {p}")
-            return
-        product_ids.append(pid)
-
-    conn = await connect_db()
-    # Вставляем продажу
-    res = await conn.fetchrow("INSERT INTO sales(client_id) VALUES ($1) RETURNING id", client_id)
-    sale_id = res['id']
-    # Вставляем связи
-    for pid in product_ids:
-        await conn.execute("INSERT INTO sales_products(sale_id, product_id) VALUES ($1, $2)", sale_id, pid)
-    await conn.close()
-
-    await message.answer("Продажа оформлена, чек будет отправлен клиенту.")
-    # Отправка чека
-    # Получаем данные для чека
-    conn2 = await connect_db()
-    client = await conn2.fetchrow("SELECT username FROM clients WHERE id = $1", client_id)
-    products = await conn2.fetch("""
-        SELECT p.name, p.price
-        FROM sales_products sp
-        JOIN products p ON p.id = sp.product_id
-        WHERE sp.sale_id = $1
-    """, sale_id)
-    await conn2.close()
-
-    pdf = generate_pdf_check(client['username'] or "Клиент", products, datetime.now())
-    file = FSInputFile(io.BytesIO(pdf), filename=f"check_{sale_id}.pdf")
-    await bot.send_document(client_id, file)
-
-    dp.message.unregister(lambda m: handle_sell_products(m, client_id))
-
-async def handle_my_orders(message: types.Message):
-    user_id = message.from_user.id
-    conn = await connect_db()
-    client = await conn.fetchrow("SELECT username FROM clients WHERE id=$1", user_id)
-    if not client:
-        await message.answer("Вы не зарегистрированы.")
-        await conn.close()
-        return
-
-    sales = await conn.fetch("""
-        SELECT id, created_at FROM sales
-        WHERE client_id = $1
-        ORDER BY created_at DESC
-    """, user_id)
-
-    if not sales:
-        await message.answer("У вас нет заказов.")
-        await conn.close()
-        return
-
-    for sale in sales:
-        products = await conn.fetch("""
-            SELECT p.name, p.price
-            FROM sales_products sp
-            JOIN products p ON p.id = sp.product_id
-            WHERE sp.sale_id = $1
-        """, sale['id'])
-        pdf = generate_pdf_check(client['username'] or "Клиент", products, sale['created_at'])
-        file = FSInputFile(io.BytesIO(pdf), filename=f"check_{sale['id']}.pdf")
-        await bot.send_document(user_id, file)
-
-    await conn.close()
+    pdf_output = io.BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output.read()
 
 async def main():
     conn = await connect_db()
