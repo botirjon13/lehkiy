@@ -4,10 +4,7 @@ import io
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton,
-    FSInputFile
-)
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from fpdf import FPDF
 from db import connect_db, create_tables
 
@@ -30,16 +27,21 @@ client_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Мои заказы")]],
     resize_keyboard=True
 )
+
+
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
+
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     conn = await connect_db()
+    await create_tables(conn)  # Автоматически создаёт новые таблицы при старте
+
     await conn.execute(
         "INSERT INTO clients (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
         message.from_user.id,
-        message.from_user.username
+        message.from_user.username or ""
     )
     await conn.close()
 
@@ -47,6 +49,8 @@ async def start(message: types.Message):
         await message.answer("Добро пожаловать, админ!", reply_markup=admin_kb)
     else:
         await message.answer("Привет! Нажми кнопку ниже, чтобы посмотреть свои заказы.", reply_markup=client_kb)
+
+
 def generate_pdf_check(client_name: str, products_list: list, date: datetime) -> bytes:
     pdf = FPDF()
     pdf.add_page()
@@ -70,6 +74,8 @@ def generate_pdf_check(client_name: str, products_list: list, date: datetime) ->
     pdf.output(pdf_output)
     pdf_output.seek(0)
     return pdf_output.read()
+
+
 @dp.message()
 async def handle_client_buttons(message: types.Message):
     if message.text == "Мои заказы":
@@ -102,11 +108,15 @@ async def handle_client_buttons(message: types.Message):
             await bot.send_document(message.from_user.id, file)
 
         await conn.close()
+
+
 async def main():
     conn = await connect_db()
     await create_tables(conn)
     await conn.close()
+
     await dp.start_polling(bot)
 
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()
