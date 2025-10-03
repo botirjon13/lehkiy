@@ -124,7 +124,7 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(on_startup())
     if __name__ == "__main__":
-    import asyncio
+        import asyncio
 
     async def main():
         await on_startup()
