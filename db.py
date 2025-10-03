@@ -1,16 +1,19 @@
+# db.py
 import asyncpg
-import os
+from config import DATABASE_URL
 
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 async def connect_db():
     return await asyncpg.connect(DATABASE_URL)
 
-async def create_tables(conn):
+
+async def create_tables():
+    conn = await connect_db()
+
     await conn.execute("""
     CREATE TABLE IF NOT EXISTS clients (
         id BIGINT PRIMARY KEY,
-        username TEXT,
+        full_name TEXT,
         phone TEXT
     );
     """)
@@ -19,7 +22,7 @@ async def create_tables(conn):
     CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        price NUMERIC NOT NULL
+        price NUMERIC(10, 2) NOT NULL
     );
     """)
 
@@ -27,25 +30,17 @@ async def create_tables(conn):
     CREATE TABLE IF NOT EXISTS sales (
         id SERIAL PRIMARY KEY,
         client_id BIGINT REFERENCES clients(id),
-        total_amount NUMERIC NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
 
     await conn.execute("""
     CREATE TABLE IF NOT EXISTS sales_products (
-        sale_id INTEGER REFERENCES sales(id),
-        product_id INTEGER REFERENCES products(id),
-        quantity INTEGER DEFAULT 1,
+        sale_id INT REFERENCES sales(id),
+        product_id INT REFERENCES products(id),
+        quantity INT NOT NULL,
         PRIMARY KEY (sale_id, product_id)
     );
     """)
 
-    await conn.execute("""
-    CREATE TABLE IF NOT EXISTS checks (
-        id SERIAL PRIMARY KEY,
-        sale_id INTEGER REFERENCES sales(id),
-        file_path TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-    );
-    """)
+    await conn.close()
