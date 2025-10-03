@@ -4,6 +4,8 @@ import os
 import asyncio
 from decimal import Decimal
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()  # Загружает переменные из .env в окружение
 
 import asyncpg
 from aiogram import Bot, Dispatcher, types
