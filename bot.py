@@ -27,11 +27,15 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-payment_kb = InlineKeyboardMarkup(row_width=3)
-payment_kb.add(
-    InlineKeyboardButton(text="Наличные", callback_data="pay_cash"),
-    InlineKeyboardButton(text="Клик на карту", callback_data="pay_click"),
-    InlineKeyboardButton(text="В долг", callback_data="pay_credit")
+payment_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Наличные", callback_data="pay_cash"),
+            InlineKeyboardButton(text="Клик на карту", callback_data="pay_click"),
+            InlineKeyboardButton(text="В долг", callback_data="pay_credit"),
+        ]
+    ],
+    row_width=3
 )
 
 # --- Временные данные ---
