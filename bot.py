@@ -79,16 +79,16 @@ class SellStates(StatesGroup):
 # --- Keyboards ---
 def main_menu_kb():
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("➕ Добавить товар")],
-        [KeyboardButton("🛒 Продать товар")],
-        [KeyboardButton("📊 Статистика")],
+        [KeyboardButton(text="➕ Добавить товар")],
+        [KeyboardButton(text="🛒 Продать товар")],
+        [KeyboardButton(text="📊 Статистика")],
     ], resize_keyboard=True)
     return kb
 
 def payment_kb():
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("💵 Наличные"), KeyboardButton("💳 Карта")],
-        [KeyboardButton("📅 В долг")],
+        [KeyboardButton(text="💵 Наличные"), KeyboardButton(text="💳 Карта")],
+        [KeyboardButton(text="📅 В долг")],
     ], resize_keyboard=True, one_time_keyboard=True)
     return kb
 
@@ -234,16 +234,16 @@ class SellStates(StatesGroup):
 # --- Keyboards ---
 def main_menu_kb():
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("➕ Добавить товар")],
-        [KeyboardButton("🛒 Продать товар")],
-        [KeyboardButton("📊 Статистика")],
+        [KeyboardButton(text="➕ Добавить товар")],
+        [KeyboardButton(text="🛒 Продать товар")],
+        [KeyboardButton(text="📊 Статистика")],
     ], resize_keyboard=True)
     return kb
 
 def payment_kb():
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("💵 Наличные"), KeyboardButton("💳 Карта")],
-        [KeyboardButton("📅 В долг")],
+        [KeyboardButton(text="💵 Наличные"), KeyboardButton(text="💳 Карта")],
+        [KeyboardButton(text="📅 В долг")],
     ], resize_keyboard=True, one_time_keyboard=True)
     return kb
 
