@@ -123,5 +123,11 @@ async def on_startup():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(on_startup())
-    from aiogram import executor
-    executor.start_polling(dp)
+    if __name__ == "__main__":
+    import asyncio
+
+    async def main():
+        await on_startup()
+        await dp.start_polling(bot)
+
+    asyncio.run(main())
