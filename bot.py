@@ -111,6 +111,31 @@ async def process_add_input(message: types.Message, state: FSMContext):
             qty = int(parts[1])
             price = Decimal(parts[2])
         else:
-            # try to parse as "name quantity price" separated by spaces (fallback)
             await message.answer("Похоже, формат другой. Введи в формате название, количество, цена (например: Яблоко, 10, 1.50).")
             return
+    except Exception as e:
+        await message.answer(f"Ошибка при обработке данных: {e}. Попробуйте ещё раз.")
+        return
+
+    # Сохраняем или обновляем товар в базе
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT id FROM products WHERE name = $1", name)
+        if existing:
+            await conn.execute("UPDATE products SET quantity = quantity + $1, price = $2 WHERE id = $3", qty, price, existing['id'])
+            await message.answer(f"Товар '{name}' обновлён: добавлено {qty} шт., цена обновлена до {price}.")
+        else:
+            await conn.execute("INSERT INTO products (name, quantity, price) VALUES ($1, $2, $3)", name, qty, price)
+            await message.answer(f"Товар '{name}' добавлен: {qty} шт. по цене {price}.")
+
+    await state.clear()
+
+# Далее должны быть остальные обработчики — например, для продажи товара и статистики
+# Если нужно, могу помочь с этим тоже
+
+async def main():
+    global db_pool
+    db_pool = await init_db_pool()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
