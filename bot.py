@@ -9,7 +9,7 @@ from aiogram.types import (
 )
 from fpdf import FPDF
 from db import connect_db, create_tables  # Предполагаемая ваша БД-логика
-from aiogram.types.message import ContentTypes
+from aiogram.types import ContentType
 
 API_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
