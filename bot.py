@@ -1,178 +1,127 @@
-import os
-import asyncio
-import io
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types
+import logging
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, Text
-from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton, FSInputFile, ContentType
-)
-from fpdf import FPDF
-from db import connect_db, create_tables  # Предполагаемая ваша БД-логика
-from aiogram.types import ContentType
+from aiogram.types import Message, CallbackQuery, ContentType
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from config import BOT_TOKEN, ADMIN_ID
+import asyncio
+import json
+from db import create_pool, init_db, add_client, add_sale, get_sales_report
+from keyboards import get_start_keyboard, get_confirm_sale_keyboard
+from utils import format_sale_items, format_report
+from datetime import datetime
 
-API_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=API_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Клавиатуры
-request_contact_btn = KeyboardButton(text="Рақамимни юбориш", request_contact=True)
-register_kb = ReplyKeyboardMarkup(keyboard=[[request_contact_btn]], resize_keyboard=True)
+# Временное хранилище продаж в памяти (для демонстрации)
+user_sales = {}
 
-admin_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Маҳсулот қўшиш")],
-        [KeyboardButton(text="Маҳсулотлар рўйхати")],
-        [KeyboardButton(text="Сотувни амалга ошириш")],
-        [KeyboardButton(text="Ҳисоботлар")]
-    ],
-    resize_keyboard=True
-)
-
-client_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="Менинг буюртмаларим")]],
-    resize_keyboard=True
-)
-
-def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_ID
-
-# Регистрация клиента с подтверждением контакта
 @dp.message(Command("start"))
-async def start_handler(message: types.Message):
-    conn = await connect_db()
-    client = await conn.fetchrow("SELECT id FROM clients WHERE id=$1", message.from_user.id)
-    if client:
-        if is_admin(message.from_user.id):
-            await message.answer("Хуш келибсиз, админ!", reply_markup=admin_kb)
-        else:
-            await message.answer("Ассалому алайкум! Рақамингизни юборишингиз лозим.", reply_markup=register_kb)
+async def cmd_start(message: Message):
+    kb = get_start_keyboard()
+    await message.answer("Salom! Iltimos, ro'yxatdan o'ting:", reply_markup=kb)
+
+@dp.message(F.contact)
+async def register_contact(message: Message):
+    contact = message.contact
+    full_name = message.from_user.full_name
+    await add_client(contact.user_id or message.from_user.id, full_name, contact.phone_number)
+    await message.answer("Ro'yxatdan muvaffaqiyatli o'tdingiz! Endi savdoni boshlashingiz mumkin.")
+    user_sales[message.from_user.id] = {"items": {}, "total": 0}
+
+@dp.message(Text("Savdo boshlash"))
+async def start_sale(message: Message):
+    user_sales[message.from_user.id] = {"items": {}, "total": 0}
+    await message.answer("Mahsulot qo'shish uchun quyidagicha yozing:\nMahsulot nomi, miqdori, narxi.\nMasalan:\nOlma, 3, 5000")
+
+@dp.message(F.text)
+async def add_item(message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_sales:
+        await message.answer("Iltimos, avval ro'yxatdan o'ting.")
+        return
+
+    try:
+        product, qty, price = [x.strip() for x in message.text.split(",")]
+        qty = int(qty)
+        price = float(price)
+    except Exception:
+        await message.answer("Noto'g'ri format. Iltimos: Mahsulot, miqdor, narx")
+        return
+
+    if product in user_sales[user_id]["items"]:
+        user_sales[user_id]["items"][product]["quantity"] += qty
     else:
-        await message.answer("Ассалому алайкум! Илтимос, рақамингизни юборинг.", reply_markup=register_kb)
-    await conn.close()
+        user_sales[user_id]["items"][product] = {"quantity": qty, "price": price}
 
-@dp.message(content_types=ContentType.CONTACT)
-async def contact_handler(message: types.Message):
-    if message.contact and message.contact.user_id == message.from_user.id:
-        conn = await connect_db()
-        await conn.execute(
-            "INSERT INTO clients (id, username, phone) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET phone = EXCLUDED.phone",
-            message.from_user.id,
-            message.from_user.username,
-            message.contact.phone_number
-        )
-        await conn.close()
-        await message.answer("Рақамингиз муваффақиятли сақланди! Энди сиз маҳсулотлардан фойдаланишингиз мумкин.", reply_markup=client_kb)
-    else:
-        await message.answer("Илтимос, ўз рақамингизни юборинг.")
+    user_sales[user_id]["total"] = sum(
+        item["quantity"] * item["price"] for item in user_sales[user_id]["items"].values()
+    )
+    await message.answer(f"Qo'shildi! Jami summa: {user_sales[user_id]['total']} so'm")
 
-# Пример добавления товара (для админа)
-@dp.message(Text(text="Маҳсулот қўшиш"))
-async def add_product(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("Фақат админга рухсат берилади.")
-        return
-    await message.answer("Илтимос, маҳсулот номини ва нархини қуйидаги форматда юборинг:\nНоми;Нарх\nМисол: Мазали нон;12000")
+    # Предложить отправить чек
+    kb = get_confirm_sale_keyboard()
+    await message.answer("Savdoni yakunlash va chek jo'natish uchun quyidagi tugmani bosing:", reply_markup=kb)
 
-@dp.message()
-async def process_product_info(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    if ";" in message.text:
-        try:
-            name, price = message.text.split(";")
-            price = float(price)
-            conn = await connect_db()
-            await conn.execute(
-                "INSERT INTO products (name, price) VALUES ($1, $2)",
-                name.strip(), price
-            )
-            await conn.close()
-            await message.answer(f"Маҳсулот '{name.strip()}' нархи {price} сўм билан қўшилди.")
-        except Exception as e:
-            await message.answer("Маълумот нотўғри форматда ёзилган ёки бошқа хатолик. Қайта уриниб кўринг.")
-    else:
-        pass  # Можно добавить другие обработчики
-
-# Оформление продажи (админ)
-@dp.message(Text(text="Сотувни амалга ошириш"))
-async def start_sale(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("Фақат админга рухсат берилади.")
-        return
-    await message.answer("Илтимос, сотув учун мижознинг Telegram ID ни киритинг:")
-
-    # Запускаем состояние FSM, чтобы далее обрабатывать ID клиента, товары и т.п.
-    # Здесь для упрощения сделаем простой запрос в несколько шагов (можно расширить с FSM)
-
-# Обработка фото чека от админа или клиента
-@dp.message(content_types=ContentType.PHOTO)
-async def handle_check_photo(message: types.Message):
-    # Сохраняем фото
-    file_id = message.photo[-1].file_id  # Самое большое фото
-    file = await bot.get_file(file_id)
-    file_path = file.file_path
-    saved_path = f"./checks/{file_id}.jpg"
-
-    # Создаем папку, если нет
-    os.makedirs("checks", exist_ok=True)
-
-    await bot.download_file(file_path, saved_path)
-
-    await message.answer("Чек расми сақланди.")
-
-    # Отправим фото клиенту и админу (если нужно)
-    await bot.send_photo(ADMIN_ID, photo=file_id, caption="Янги чек расми қабул қилинди.")
-    await message.answer_photo(photo=file_id, caption="Сизнинг чек расмингиз қабул қилинди.")
-
-# Генерация отчётов (простой пример)
-@dp.message(Text(text="Ҳисоботлар"))
-async def reports(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("Фақат админга рухсат берилади.")
+@dp.callback_query(Text("confirm_sale"))
+async def confirm_sale(call: CallbackQuery):
+    user_id = call.from_user.id
+    if user_id not in user_sales or not user_sales[user_id]["items"]:
+        await call.message.answer("Savdo topilmadi yoki bo'sh.")
         return
 
-    conn = await connect_db()
-    total_sales = await conn.fetchval("SELECT SUM(total_amount) FROM sales")
-    sales_count = await conn.fetchval("SELECT COUNT(*) FROM sales")
+    await call.message.answer("Iltimos, chek fotosuratini yuboring.")
 
-    await message.answer(f"Жами сотувлар сони: {sales_count}\nЖами даромад: {total_sales} сўм")
+    # Ожидаем фото в следующем сообщении (упрощенно)
+    dp.message.register(receive_receipt_photo, F.photo, state=None)
 
-    await conn.close()
+    await call.answer()
 
-# Пример генерации PDF чека
-def generate_pdf_check(client_name: str, products_list: list, date: datetime) -> bytes:
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
+async def receive_receipt_photo(message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_sales:
+        await message.answer("Savdo topilmadi.")
+        return
 
-    pdf.cell(0, 10, f"Харидор: {client_name}", ln=1)
-    pdf.cell(0, 10, f"Сана: {date.strftime('%Y-%m-%d %H:%M')}", ln=1)
-    pdf.ln(5)
+    photo = message.photo[-1]
+    file_id = photo.file_id
 
-    total = 0
-    for product in products_list:
-        name = product['name']
-        qty = product.get('quantity', 1)
-        price = product['price']
-        pdf.cell(0, 10, f"{name} — {qty} × {price} сўм", ln=1)
-        total += price * qty
+    # Сохраняем чек в базе
+    await add_sale(
+        client_id=user_id,
+        items=user_sales[user_id]["items"],
+        total_amount=user_sales[user_id]["total"],
+        receipt_photo=file_id
+    )
 
-    pdf.ln(5)
-    pdf.cell(0, 10, f"Жами: {total} сўм", ln=1)
+    # Формируем текст чека
+    receipt_text = "Sizning chek:\n\n"
+    receipt_text += format_sale_items(user_sales[user_id]["items"])
+    receipt_text += f"\nJami: {user_sales[user_id]['total']} so'm\n"
+    receipt_text += f"Sana va vaqt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
-    pdf_output = io.BytesIO()
-    pdf.output(pdf_output)
-    pdf_output.seek(0)
-    return pdf_output.read()
+    # Отправляем чек клиенту
+    await message.answer(receipt_text)
+    await message.answer_photo(file_id, caption="Sizning chek rasmingiz")
 
-async def main():
-    conn = await connect_db()
-    await create_tables(conn)
-    await conn.close()
-    await dp.start_polling(bot)
+    # Отправляем админу
+    if ADMIN_ID:
+        await bot.send_message(ADMIN_ID, f"Yangi savdo:\n\n{receipt_text}")
+        await bot.send_photo(ADMIN_ID, file_id, caption="Savdo chеki")
+
+    # Очистить временные данные
+    user_sales.pop(user_id, None)
+
+async def on_startup():
+    await create_pool()
+    await init_db()
+    logging.info("Bot started!")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+    asyncio.run(on_startup())
+    from aiogram import executor
+    executor.start_polling(dp)
