@@ -1,9 +1,10 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 def get_start_keyboard():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(KeyboardButton("Ro'yxatdan o'tish", request_contact=True))
-    return kb
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton("Ro'yxatdan o'tish", request_contact=True))
+    return builder.as_markup(resize_keyboard=True)
 
 def get_confirm_sale_keyboard():
     kb = InlineKeyboardMarkup()
