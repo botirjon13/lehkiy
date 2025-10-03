@@ -1,130 +1,279 @@
 import logging
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, Text
-from aiogram.types import Message, CallbackQuery, ContentType
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from config import BOT_TOKEN, ADMIN_ID
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+import asyncpg
 import asyncio
-import json
-from db import create_pool, init_db, add_client, add_sale, get_sales_report
-from keyboards import get_start_keyboard, get_confirm_sale_keyboard
-from utils import format_sale_items, format_report
-from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
+
+BOT_TOKEN = "7196045219:AAFfbeIZQXKAb_cgAC2cnbdMY__L0Iakcrg"
+ADMIN_ID = 1262207928  # ваш ID для уведомлений
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Временное хранилище продаж в памяти (для демонстрации)
-user_sales = {}
+DATABASE_URL = "postgresql://user:password@localhost/dbname"
 
+db_pool = None
+
+# --- Клавиатуры ---
+main_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Добавить товар")],
+        [KeyboardButton(text="Продать товар")],
+        [KeyboardButton(text="Статистика")]
+    ],
+    resize_keyboard=True
+)
+
+payment_kb = InlineKeyboardMarkup(row_width=3)
+payment_kb.add(
+    InlineKeyboardButton(text="Наличные", callback_data="pay_cash"),
+    InlineKeyboardButton(text="Клик на карту", callback_data="pay_click"),
+    InlineKeyboardButton(text="В долг", callback_data="pay_credit")
+)
+
+# --- Временные данные ---
+user_states = {}  # для пошагового ввода
+user_cart = {}    # корзина продаж
+
+# --- Функции работы с базой ---
+async def create_pool():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+
+async def add_product(name, quantity, price):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO products (name, quantity, price) VALUES ($1, $2, $3)",
+            name, quantity, price
+        )
+
+async def get_products():
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("SELECT id, name, quantity, price FROM products")
+
+async def update_product_quantity(product_id, quantity_change):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE products SET quantity = quantity + $1 WHERE id = $2",
+            quantity_change, product_id
+        )
+
+async def add_client(name, phone):
+    async with db_pool.acquire() as conn:
+        # попробуем вставить, если уже есть — вернуть id
+        client = await conn.fetchrow("SELECT id FROM clients WHERE phone = $1", phone)
+        if client:
+            return client["id"]
+        else:
+            row = await conn.fetchrow(
+                "INSERT INTO clients (name, phone) VALUES ($1, $2) RETURNING id",
+                name, phone
+            )
+            return row["id"]
+
+async def add_sale(client_id, payment_method, total, items):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            sale = await conn.fetchrow(
+                "INSERT INTO sales (client_id, payment_method, total) VALUES ($1, $2, $3) RETURNING id",
+                client_id, payment_method, total
+            )
+            sale_id = sale["id"]
+            for item in items:
+                await conn.execute(
+                    "INSERT INTO sale_items (sale_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)",
+                    sale_id, item['product_id'], item['quantity'], item['price']
+                )
+                # уменьшаем количество товара на складе
+                await update_product_quantity(item['product_id'], -item['quantity'])
+            return sale_id
+
+# --- Хендлеры ---
 @dp.message(Command("start"))
-async def cmd_start(message: Message):
-    kb = get_start_keyboard()
-    await message.answer("Salom! Iltimos, ro'yxatdan o'ting:", reply_markup=kb)
+async def cmd_start(message: types.Message):
+    await message.answer("Привет! Это CRM-бот.", reply_markup=main_kb)
 
-@dp.message(F.contact)
-async def register_contact(message: Message):
-    contact = message.contact
-    full_name = message.from_user.full_name
-    await add_client(contact.user_id or message.from_user.id, full_name, contact.phone_number)
-    await message.answer("Ro'yxatdan muvaffaqiyatli o'tdingiz! Endi savdoni boshlashingiz mumkin.")
-    user_sales[message.from_user.id] = {"items": {}, "total": 0}
+# Добавление товара — пошаговый ввод
+@dp.message(Text("Добавить товар"))
+async def add_product_start(message: types.Message):
+    user_states[message.from_user.id] = {"step": 1, "data": {}}
+    await message.answer("Введите название товара:")
 
-@dp.message(Text("Savdo boshlash"))
-async def start_sale(message: Message):
-    user_sales[message.from_user.id] = {"items": {}, "total": 0}
-    await message.answer("Mahsulot qo'shish uchun quyidagicha yozing:\nMahsulot nomi, miqdori, narxi.\nMasalan:\nOlma, 3, 5000")
-
-@dp.message(F.text)
-async def add_item(message: Message):
+@dp.message()
+async def process_add_product(message: types.Message):
     user_id = message.from_user.id
-    if user_id not in user_sales:
-        await message.answer("Iltimos, avval ro'yxatdan o'ting.")
+    if user_id not in user_states:
+        return
+    state = user_states[user_id]
+
+    if state["step"] == 1:
+        state["data"]["name"] = message.text.strip()
+        state["step"] = 2
+        await message.answer("Введите количество:")
+    elif state["step"] == 2:
+        if not message.text.isdigit():
+            await message.answer("Количество должно быть числом. Введите количество:")
+            return
+        state["data"]["quantity"] = int(message.text)
+        state["step"] = 3
+        await message.answer("Введите цену за единицу (например 5000):")
+    elif state["step"] == 3:
+        try:
+            price = float(message.text.replace(",", "."))
+        except ValueError:
+            await message.answer("Цена должна быть числом. Введите цену:")
+            return
+        state["data"]["price"] = price
+
+        # Добавляем товар в БД
+        await add_product(state["data"]["name"], state["data"]["quantity"], state["data"]["price"])
+        await message.answer(f"Товар {state['data']['name']} добавлен в склад.")
+        user_states.pop(user_id)
+
+# Продажа товара — показываем товары для выбора
+@dp.message(Text("Продать товар"))
+async def sell_product_start(message: types.Message):
+    products = await get_products()
+    if not products:
+        await message.answer("Склад пуст. Добавьте товары.")
         return
 
-    try:
-        product, qty, price = [x.strip() for x in message.text.split(",")]
-        qty = int(qty)
-        price = float(price)
-    except Exception:
-        await message.answer("Noto'g'ri format. Iltimos: Mahsulot, miqdor, narx")
+    kb = InlineKeyboardMarkup(row_width=1)
+    for p in products:
+        kb.add(InlineKeyboardButton(text=f"{p['name']} (в наличии {p['quantity']})", callback_data=f"sell_{p['id']}"))
+
+    user_cart[message.from_user.id] = []  # новая корзина
+    await message.answer("Выберите товар для продажи:", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("sell_"))
+async def process_sell_product(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    product_id = int(callback.data.split("_")[1])
+
+    # Сохраняем выбранный товар в состоянии для ввода количества и цены
+    user_states[user_id] = {"step": "sell_quantity", "product_id": product_id}
+    await callback.message.answer("Введите количество товара для продажи:")
+    await callback.answer()
+
+@dp.message()
+async def process_sell_quantity_price(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_states:
+        return
+    state = user_states[user_id]
+
+    if state.get("step") == "sell_quantity":
+        if not message.text.isdigit():
+            await message.answer("Количество должно быть числом. Введите количество:")
+            return
+        state["quantity"] = int(message.text)
+        state["step"] = "sell_price"
+        await message.answer("Введите цену продажи за единицу:")
+    elif state.get("step") == "sell_price":
+        try:
+            price = float(message.text.replace(",", "."))
+        except ValueError:
+            await message.answer("Цена должна быть числом. Введите цену:")
+            return
+        state["price"] = price
+        state["step"] = "confirm_add_to_cart"
+
+        # Добавляем товар в корзину
+        if user_id not in user_cart:
+            user_cart[user_id] = []
+        user_cart[user_id].append({
+            "product_id": state["product_id"],
+            "quantity": state["quantity"],
+            "price": state["price"]
+        })
+        await message.answer(f"Товар добавлен в корзину. Для добавления других товаров нажмите 'Продать товар', для оформления нажмите /checkout")
+        user_states.pop(user_id)
+
+# Команда /checkout — подтверждение и выбор оплаты
+@dp.message(Command("checkout"))
+async def checkout(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_cart or not user_cart[user_id]:
+        await message.answer("Корзина пуста.")
         return
 
-    if product in user_sales[user_id]["items"]:
-        user_sales[user_id]["items"][product]["quantity"] += qty
+    # Подсчёт суммы
+    total = sum(item['quantity'] * item['price'] for item in user_cart[user_id])
+    user_states[user_id] = {"step": "payment_selection", "total": total}
+    await message.answer(f"Итоговая сумма: {total}.\nВыберите способ оплаты:", reply_markup=payment_kb)
+
+@dp.callback_query(Text(startswith="pay_"))
+async def process_payment(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in user_states or user_states[user_id].get("step") != "payment_selection":
+        await callback.answer("Пожалуйста, начните оформление через /checkout")
+        return
+
+    payment_method = callback.data[4:]
+    state = user_states[user_id]
+
+    # Для простоты спросим имя и телефон клиента
+    user_states[user_id] = {"step": "client_info", "payment_method": payment_method, "total": state["total"]}
+
+    await callback.message.answer("Введите имя клиента:")
+    await callback.answer()
+
+@dp.message()
+async def process_client_info(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_states or user_states[user_id].get("step") != "client_info":
+        return
+    state = user_states[user_id]
+
+    if "name" not in state:
+        state["name"] = message.text.strip()
+        await message.answer("Введите номер телефона клиента:")
     else:
-        user_sales[user_id]["items"][product] = {"quantity": qty, "price": price}
+        phone = message.text.strip()
+        state["phone"] = phone
 
-    user_sales[user_id]["total"] = sum(
-        item["quantity"] * item["price"] for item in user_sales[user_id]["items"].values()
-    )
-    await message.answer(f"Qo'shildi! Jami summa: {user_sales[user_id]['total']} so'm")
+        # Добавляем клиента в БД
+        client_id = await add_client(state["name"], state["phone"])
 
-    # Предложить отправить чек
-    kb = get_confirm_sale_keyboard()
-    await message.answer("Savdoni yakunlash va chek jo'natish uchun quyidagi tugmani bosing:", reply_markup=kb)
+        # Добавляем продажу
+        sale_id = await add_sale(client_id, state["payment_method"], state["total"], user_cart[user_id])
 
-@dp.callback_query(Text("confirm_sale"))
-async def confirm_sale(call: CallbackQuery):
-    user_id = call.from_user.id
-    if user_id not in user_sales or not user_sales[user_id]["items"]:
-        await call.message.answer("Savdo topilmadi yoki bo'sh.")
-        return
+        # Формируем чек
+        receipt = f"Чек продажи №{sale_id}\nДата: сейчас\nКлиент: {state['name']}\nТелефон: {state['phone']}\n\nТовары:\n"
+        for item in user_cart[user_id]:
+            # Для простоты можно получить название из БД, но сейчас просто id
+            receipt += f"- Товар ID {item['product_id']}, Кол-во: {item['quantity']}, Цена: {item['price']}\n"
+        receipt += f"\nИтого: {state['total']}\nОплата: {state['payment_method']}"
 
-    await call.message.answer("Iltimos, chek fotosuratini yuboring.")
+        await message.answer(receipt)
+        if ADMIN_ID:
+            await bot.send_message(ADMIN_ID, f"Новая продажа:\n{receipt}")
 
-    # Ожидаем фото в следующем сообщении (упрощенно)
-    dp.message.register(receive_receipt_photo, F.photo, state=None)
+        # Очистка состояний и корзины
+        user_states.pop(user_id)
+        user_cart.pop(user_id)
 
-    await call.answer()
+# --- Статистика ---
+@dp.message(Text("Статистика"))
+async def stats(message: types.Message):
+    async with db_pool.acquire() as conn:
+        # Подсчёт дохода за день, месяц, год
+        day = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE sale_date::date = CURRENT_DATE")
+        month = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE date_trunc('month', sale_date) = date_trunc('month', CURRENT_DATE)")
+        year = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE date_trunc('year', sale_date) = date_trunc('year', CURRENT_DATE)")
 
-async def receive_receipt_photo(message: Message):
-    user_id = message.from_user.id
-    if user_id not in user_sales:
-        await message.answer("Savdo topilmadi.")
-        return
+    await message.answer(f"Доходы:\nСегодня: {day}\nЭтот месяц: {month}\nЭтот год: {year}")
 
-    photo = message.photo[-1]
-    file_id = photo.file_id
-
-    # Сохраняем чек в базе
-    await add_sale(
-        client_id=user_id,
-        items=user_sales[user_id]["items"],
-        total_amount=user_sales[user_id]["total"],
-        receipt_photo=file_id
-    )
-
-    # Формируем текст чека
-    receipt_text = "Sizning chek:\n\n"
-    receipt_text += format_sale_items(user_sales[user_id]["items"])
-    receipt_text += f"\nJami: {user_sales[user_id]['total']} so'm\n"
-    receipt_text += f"Sana va vaqt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-
-    # Отправляем чек клиенту
-    await message.answer(receipt_text)
-    await message.answer_photo(file_id, caption="Sizning chek rasmingiz")
-
-    # Отправляем админу
-    if ADMIN_ID:
-        await bot.send_message(ADMIN_ID, f"Yangi savdo:\n\n{receipt_text}")
-        await bot.send_photo(ADMIN_ID, file_id, caption="Savdo chеki")
-
-    # Очистить временные данные
-    user_sales.pop(user_id, None)
-
+# --- Запуск ---
 async def on_startup():
     await create_pool()
-    await init_db()
-    logging.info("Bot started!")
+    logging.info("Бот запущен!")
 
 if __name__ == "__main__":
     import asyncio
-
-    async def main():
-        await on_startup()
-        await dp.start_polling(bot)
-
-    asyncio.run(main())
+    asyncio.run(on_startup())
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
