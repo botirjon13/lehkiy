@@ -11,7 +11,7 @@ from aiogram.types import (
 from fpdf import FPDF
 from db import connect_db, create_tables
 
-API_TOKEN = os.getenv("API_TOKEN")
+API_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 bot = Bot(token=API_TOKEN)
