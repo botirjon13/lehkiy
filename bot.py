@@ -7,7 +7,7 @@ from aiogram.types import FSInputFile
 from fpdf import FPDF
 import asyncio
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')  # Берём из переменных окружения
+API_TOKEN = os.getenv('BOT_TOKEN')  # Берём из переменных окружения
 ADMIN_ID = int(os.getenv('ADMIN_ID'))  # Твой Telegram ID (число)
 
 logging.basicConfig(level=logging.INFO)
