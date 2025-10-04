@@ -10,14 +10,14 @@ from dotenv import load_dotenv
 load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
+from aiogram.filters import Text
 from aiogram.filters.state import StateFilter
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.types.message import ContentType
 
 # Проверяем переменные окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -162,44 +162,47 @@ async def start_sell(message: types.Message, state: FSMContext):
         await message.answer("Нет товаров для продажи. Сначала добавьте товар.")
         await state.clear()
         return
-    product_names = '\n'.join([record['name'] for record in products])
-    await message.answer(f"Выберите товар для продажи. Доступные товары:\n{product_names}")
+    # Здесь не отправляем список, пользователь вводит текст для автодополнения
+    await message.answer("Введите название товара для продажи (начните вводить, и я подскажу)")
 
-@dp.message(SellStates.waiting_for_product)
-async def process_sell_product(message: types.Message, state: FSMContext):
-    product_name = message.text.strip()
-    async with db_pool.acquire() as conn:
-        product = await conn.fetchrow("SELECT * FROM products WHERE name = $1", product_name)
-    if not product:
-        await message.answer("Товар не найден. Введите название товара из списка.")
-        return
-    await state.update_data(product=product)
-    await state.set_state(SellStates.waiting_for_quantity)
-    await message.answer(f"Введите количество для продажи (доступно: {product['quantity']})")
-
-# --- Новый хендлер для автодополнения ---
-
+# --- Хендлер автодополнения товаров ---
 @dp.message(StateFilter(SellStates.waiting_for_product))
-async def autocomplete_product_name(message: types.Message, state: FSMContext):
+async def process_product_autocomplete(message: types.Message, state: FSMContext):
     text = message.text.strip()
     if len(text) < 2:
-        # Не показываем подсказки для коротких запросов
-        await message.answer("Введите хотя бы 2 символа для поиска товара.")
+        await message.answer("Введите минимум 2 символа для поиска товара.")
         return
-    await send_product_suggestions(message, db_pool, text)
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT name FROM products WHERE LOWER(name) LIKE LOWER($1) ORDER BY name LIMIT 5",
+            f"%{text}%"
+        )
+    if not rows:
+        await message.answer("Товары не найдены. Попробуйте другое название.")
+        return
+    buttons = [
+        InlineKeyboardButton(text=record['name'], callback_data=f"select_product:{record['name']}")
+        for record in rows
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+    await message.answer("Выберите товар из списка:", reply_markup=kb)
 
-@dp.callback_query(lambda c: c.data and c.data.startswith("select_product:"))
-async def process_product_selection(callback_query: types.CallbackQuery, state: FSMContext):
-    product_name = callback_query.data[len("select_product:"):]
+# --- Обработка выбора товара из подсказок ---
+@dp.callback_query(Text(startswith="select_product:"))
+async def select_product_callback(call: types.CallbackQuery, state: FSMContext):
+    product_name = call.data.split("select_product:")[1]
     async with db_pool.acquire() as conn:
         product = await conn.fetchrow("SELECT * FROM products WHERE name = $1", product_name)
     if not product:
-        await callback_query.answer("Товар не найден.", show_alert=True)
+        await call.answer("Товар не найден.", show_alert=True)
         return
     await state.update_data(product=product)
     await state.set_state(SellStates.waiting_for_quantity)
-    await bot.send_message(callback_query.from_user.id, f"Вы выбрали: {product_name}\nВведите количество для продажи (доступно: {product['quantity']})")
-    await callback_query.answer()
+    await bot.send_message(
+        call.from_user.id,
+        f"Вы выбрали: {product_name}\nВведите количество для продажи (в наличии {product['quantity']})"
+    )
+    await call.answer()
 
 @dp.message(SellStates.waiting_for_quantity)
 async def process_sell_quantity(message: types.Message, state: FSMContext):
@@ -237,88 +240,63 @@ async def process_client_phone(message: types.Message, state: FSMContext):
         return
     await state.update_data(client_phone=phone)
     await state.set_state(SellStates.waiting_for_payment)
-    await message.answer("Выберите способ оплаты:", reply_markup=payment_kb())
+    await message.answer("Выберите способ оплаты", reply_markup=payment_kb())
 
 @dp.message(SellStates.waiting_for_payment)
 async def process_payment(message: types.Message, state: FSMContext):
-    payment = message.text.strip()
-    if payment not in ["💵 Наличные", "💳 Карта", "📅 В долг"]:
-        await message.answer("Выберите способ оплаты, используя кнопки.")
+    pay_method = message.text.strip()
+    if pay_method not in ["💵 Наличные", "💳 Карта", "📅 В долг"]:
+        await message.answer("Выберите способ оплаты с клавиатуры.")
         return
-    await state.update_data(payment_method=payment)
+    await state.update_data(payment_method=pay_method)
     data = await state.get_data()
     product = data['product']
-    quantity = data['quantity']
-    total = quantity * float(product['price'])
-    await state.update_data(total=total)
-
-    confirm_text = (
-        f"Подтверждаете продажу?\n\n"
+    qty = data['quantity']
+    total = Decimal(product['price']) * qty
+    await message.answer(
+        f"Подтвердите продажу:\n\n"
         f"Товар: {product['name']}\n"
-        f"Количество: {quantity}\n"
+        f"Количество: {qty}\n"
+        f"Цена за единицу: {product['price']}\n"
+        f"Общая сумма: {total}\n"
         f"Клиент: {data['client_name']}\n"
         f"Телефон: {data['client_phone']}\n"
-        f"Оплата: {payment}\n"
-        f"Итого: {total:.2f} у.е."
+        f"Оплата: {pay_method}\n\n"
+        f"Напишите 'да' для подтверждения или 'отмена' для отмены."
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подтвердить", callback_data="confirm_sale")],
-        [InlineKeyboardButton(text="Отмена", callback_data="cancel_sale")],
-    ])
     await state.set_state(SellStates.confirm)
-    await message.answer(confirm_text, reply_markup=kb)
 
-@dp.callback_query(Text("confirm_sale"), StateFilter(SellStates.confirm))
-async def confirm_sale(callback_query: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    product = data['product']
-    quantity = data['quantity']
-    client_name = data['client_name']
-    client_phone = data['client_phone']
-    payment_method = data['payment_method']
-    total = data['total']
+@dp.message(SellStates.confirm)
+async def process_confirm(message: types.Message, state: FSMContext):
+    text = message.text.strip().lower()
+    if text == "да":
+        data = await state.get_data()
+        product = data['product']
+        qty = data['quantity']
+        client_name = data['client_name']
+        client_phone = data['client_phone']
+        payment_method = data['payment_method']
+        total = Decimal(product['price']) * qty
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                product['id'], qty, product['price'], total,
+                client_name, client_phone, payment_method, datetime.now()
+            )
+            await conn.execute(
+                "UPDATE products SET quantity=quantity-$1 WHERE id=$2",
+                qty, product['id']
+            )
+        await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
+        await state.clear()
+    elif text == "отмена":
+        await message.answer("Операция отменена.", reply_markup=main_menu_kb())
+        await state.clear()
+    else:
+        await message.answer("Напишите 'да' для подтверждения или 'отмена' для отмены.")
 
-    async with db_pool.acquire() as conn:
-        # Проверяем остаток
-        product_db = await conn.fetchrow("SELECT quantity FROM products WHERE id = $1", product['id'])
-        if product_db['quantity'] < quantity:
-            await callback_query.answer("Недостаточно товара для продажи.", show_alert=True)
-            await state.clear()
-            return
-        # Обновляем количество
-        await conn.execute("UPDATE products SET quantity = quantity - $1 WHERE id = $2", quantity, product['id'])
-        # Добавляем запись продажи
-        await conn.execute(
-            "INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-            product['id'], quantity, product['price'], Decimal(total), client_name, client_phone, payment_method, datetime.now()
-        )
-    await callback_query.message.answer("Продажа успешно оформлена.")
-    await callback_query.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_kb())
-    await callback_query.answer()
-    await state.clear()
-
-@dp.callback_query(Text("cancel_sale"), StateFilter(SellStates.confirm))
-async def cancel_sale(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.message.answer("Продажа отменена.", reply_markup=main_menu_kb())
-    await callback_query.answer()
-    await state.clear()
-
-# --- Автодополнение товаров ---
-async def send_product_suggestions(message: types.Message, pool: asyncpg.pool.Pool, text: str):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT name FROM products WHERE LOWER(name) LIKE LOWER($1) LIMIT 5", f"%{text}%")
-    if not rows:
-        await message.answer("Совпадений не найдено.")
-        return
-    buttons = [
-        InlineKeyboardButton(text=record['name'], callback_data=f"select_product:{record['name']}")
-        for record in rows
-    ]
-    kb = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-    await message.answer("Выберите товар:", reply_markup=kb)
-
-# --- Основной запуск ---
+# --- Запуск бота ---
 async def main():
     global db_pool
     db_pool = await init_db_pool()
