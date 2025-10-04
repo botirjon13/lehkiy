@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# bot_text_search.py
-# O‘zbekcha CRM bot — mahsulot qidiruv, sotish, hisobot
+# bot_text_search_cart.py
+# O‘zbekcha CRM bot — mahsulot qidiruv, savatcha bilan sotish, hisobot
 
 import os
 import io
@@ -9,7 +9,6 @@ import logging
 from decimal import Decimal
 from datetime import datetime
 from dotenv import load_dotenv
-import hashlib
 
 import asyncpg
 import matplotlib
@@ -97,10 +96,14 @@ def main_menu_kb():
         keyboard=[
             [KeyboardButton(text="➕ Mahsulot qo‘shish")],
             [KeyboardButton(text="🛒 Sotish")],
+            [KeyboardButton(text="🛒 Savatcha")],
             [KeyboardButton(text="📊 Hisobot")],
         ],
         resize_keyboard=True
     )
+
+# --- Savatcha (memory) ---
+user_cart: dict[int, list[dict]] = {}
 
 # --- Handlers ---
 @dp.message(Command('start'))
@@ -113,7 +116,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Salom! CRM botga hush kelibsiz.\n\n"
         "Buyruqlar:\n"
         "➕ Mahsulot qo'shish — yangi mahsulot qo'shish yoki yangilash\n"
-        "🛒 Sotish — mahsulotni qidirib sotish (tugmalar bilan)\n"
+        "🛒 Sotish — mahsulotni qidirib savatchaga qo‘shish\n"
+        "🛒 Savatcha — savatchadagi mahsulotlarni ko‘rish va sotish\n"
         "📊 Hisobot — kun/oy/yil bo'yicha hisobot va grafik\n\n"
         "Misol: mahsulot qo'shish uchun `Olma, 10, 5000`\n"
         "Sotish uchun: \"🛒 Sotish\" tugmasini bosing va mahsulot nomini kiriting."
@@ -160,7 +164,7 @@ async def process_add_input(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-# --- Sotish ---
+# --- Sotish: qidiruv ---
 @dp.message(Text('🛒 Sotish'))
 async def start_sell(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -194,52 +198,73 @@ async def sell_search(message: types.Message):
     for r in rows:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")]
+                [InlineKeyboardButton(text=f"➕ Savatchaga ({r['price']})", callback_data=f"cart_add:{r['id']}")]
             ]
         )
         await message.answer(f"{r['name']} — {r['quantity']} ta, narxi: {r['price']}", reply_markup=kb)
 
-# --- Callback: buy ---
-@dp.callback_query(F.data.startswith('buy:'))
-async def handle_buy(call: types.CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
-
+# --- Callback: savatchaga qo‘shish ---
+@dp.callback_query(F.data.startswith('cart_add:'))
+async def add_to_cart(call: types.CallbackQuery):
     try:
         product_id = int(call.data.split(':', 1)[1])
-    except Exception:
-        return await call.answer("Noto'g'ri ma'lumot", show_alert=True)
-
-    try:
         row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
     except Exception:
-        logger.exception('DB error on fetch product')
-        return await call.answer('Xatolik yuz berdi', show_alert=True)
+        return await call.answer("Xatolik yuz berdi", show_alert=True)
 
     if not row:
-        return await call.answer('Mahsulot topilmadi', show_alert=True)
+        return await call.answer("Mahsulot topilmadi", show_alert=True)
 
     if row['quantity'] <= 0:
-        return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
+        return await call.answer("Omborda mahsulot yo‘q", show_alert=True)
+
+    cart = user_cart.setdefault(call.from_user.id, [])
+    cart.append({'id': row['id'], 'name': row['name'], 'price': row['price']})
+    await call.answer(f"✅ {row['name']} savatchaga qo‘shildi")
+
+# --- Savatchani ko‘rsatish va sotish ---
+@dp.message(Text("🛒 Savatcha"))
+async def view_cart(message: types.Message):
+    cart = user_cart.get(message.from_user.id, [])
+    if not cart:
+        return await message.answer("Savatcha bo‘sh")
+
+    text_lines = []
+    total = 0
+    for i, item in enumerate(cart, start=1):
+        text_lines.append(f"{i}. {item['name']} — {item['price']}")
+        total += float(item['price'])
+
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton(text="💳 Savatchani sotish", callback_data="cart_checkout"))
+
+    msg = "\n".join(text_lines) + f"\n\nUmumiy: {total:.2f}"
+    await message.answer(msg, reply_markup=kb)
+
+@dp.callback_query(F.data=="cart_checkout")
+async def checkout_cart(call: types.CallbackQuery):
+    cart = user_cart.get(call.from_user.id, [])
+    if not cart:
+        return await call.answer("Savatcha bo‘sh", show_alert=True)
 
     try:
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
-                row['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id
-            )
-            await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', row['id'])
+            for item in cart:
+                row = await conn.fetchrow('SELECT quantity, price FROM products WHERE id=$1', item['id'])
+                if not row or row['quantity'] <= 0:
+                    continue
+                await conn.execute(
+                    'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
+                    item['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id
+                )
+                await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', item['id'])
     except Exception:
-        logger.exception('DB error on buy')
-        return await call.answer('Savdoni saqlashda xatolik', show_alert=True)
+        logger.exception('Checkout DB error')
+        return await call.answer("Xatolik yuz berdi", show_alert=True)
 
-    remaining = row['quantity'] - 1
-    try:
-        await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
-    except Exception:
-        await call.message.answer(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
-
-    await call.answer('✅ Sotib olindi')
+    user_cart[call.from_user.id] = []
+    await call.message.answer("✅ Savatcha sotildi!")
+    await call.answer("✅ Savatcha sotildi")
 
 # --- Hisobot ---
 @dp.message(Text('📊 Hisobot'))
