@@ -276,7 +276,7 @@ async def process_confirm(message: types.Message, state: FSMContext):
         await message.answer("Напишите 'да' для подтверждения или 'отмена' для отмены.")
 
 # --- Inline Query Handler (для поиска товаров в любом чате) ---
-@dp.inline_handler()
+@dp.inline_query()
 async def inline_query_handler(inline_query: InlineQuery):
     query = inline_query.query.strip().lower()
     if not query:
