@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
+from aiogram.filters import Text
+from aiogram.filters.state import StateFilter
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, Text
 from aiogram.fsm.context import FSMContext
@@ -178,7 +180,7 @@ async def process_sell_product(message: types.Message, state: FSMContext):
 
 # --- Новый хендлер для автодополнения ---
 
-@dp.message(SellStates.waiting_for_product, content_types=ContentType.TEXT)
+@dp.message(StateFilter(SellStates.waiting_for_product), Text())
 async def autocomplete_product_name(message: types.Message, state: FSMContext):
     text = message.text.strip()
     if len(text) < 2:
