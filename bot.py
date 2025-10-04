@@ -1,184 +1,320 @@
 #!/usr/bin/env python3
-# oddiy crm bot (savatchasiz)
+# bot.py
 
 import os
 import asyncio
-import logging
 from decimal import Decimal
 from datetime import datetime
 from dotenv import load_dotenv
+import hashlib
+
+load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, Text
+from aiogram.filters import Text
+from aiogram.filters.state import StateFilter
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    KeyboardButton, ReplyKeyboardMarkup,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- Env ---
-load_dotenv()
+# Проверяем переменные окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMINS = [int(x.strip()) for x in os.getenv('ADMINS', '').split(',') if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL sozlanmagan")
+    raise RuntimeError("TELEGRAM_TOKEN and DATABASE_URL must be set in environment variables")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-db_pool: asyncpg.pool.Pool | None = None
-
-# --- DB init ---
+# --- DB helpers ---
 async def init_db_pool():
     pool = await asyncpg.create_pool(DATABASE_URL)
     async with pool.acquire() as conn:
-        await conn.execute('''
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
             name TEXT UNIQUE NOT NULL,
             quantity INT NOT NULL,
-            price NUMERIC(12,2) NOT NULL,
-            created_at TIMESTAMP DEFAULT now(),
-            updated_at TIMESTAMP DEFAULT now()
+            price NUMERIC(10,2) NOT NULL
         );
-        ''')
-        await conn.execute('''
+        """)
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS sales (
             id SERIAL PRIMARY KEY,
             product_id INT REFERENCES products(id),
             quantity INT NOT NULL,
-            price NUMERIC(12,2) NOT NULL,
-            total NUMERIC(14,2) NOT NULL,
-            sale_date TIMESTAMP NOT NULL,
-            seller_id BIGINT
+            price NUMERIC(10,2) NOT NULL,
+            total NUMERIC(10,2) NOT NULL,
+            client_name TEXT,
+            client_phone TEXT,
+            payment_method TEXT,
+            sale_date TIMESTAMP NOT NULL
         );
-        ''')
-    logger.info("DB pool tayyor")
+        """)
     return pool
 
-# --- Helpers ---
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMINS if ADMINS else False
+db_pool: asyncpg.pool.Pool | None = None
 
-# --- FSM ---
+# --- FSM states ---
 class AddProductStates(StatesGroup):
     waiting_for_input = State()
 
+class SellStates(StatesGroup):
+    waiting_for_product = State()
+    waiting_for_quantity = State()
+    waiting_for_client_name = State()
+    waiting_for_client_phone = State()
+    waiting_for_payment = State()
+    confirm = State()
+
 # --- Keyboards ---
 def main_menu_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Mahsulot qo‘shish")],
-            [KeyboardButton(text="🛒 Sotish")],
-            [KeyboardButton(text="📊 Hisobot")],
-        ],
-        resize_keyboard=True
-    )
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="➕ Добавить товар")],
+        [KeyboardButton(text="🛒 Продать товар")],
+        [KeyboardButton(text="📊 Статистика")],
+    ], resize_keyboard=True)
+    return kb
+
+def payment_kb():
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="💵 Наличные"), KeyboardButton(text="💳 Карта")],
+        [KeyboardButton(text="📅 В долг")],
+    ], resize_keyboard=True, one_time_keyboard=True)
+    return kb
 
 # --- Handlers ---
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return await message.answer("⛔ Sizda huquq yo‘q")
     await state.clear()
-    await message.answer("Salom! CRM bot ishga tayyor.", reply_markup=main_menu_kb())
+    text = (
+        "Привет! Я простой CRM-бот.\n\n"
+        "Доступные команды:\n"
+        "➕ Добавить товар — добавить/обновить товар (формат: название,количество,цена) или нажми кнопку\n"
+        "🛒 Продать товар — оформить продажу\n"
+        "📊 Статистика — показать общий доход\n\n"
+        "Пример добавления в одной строке:\n"
+        "`Яблоко, 10, 1.50`\n\n"
+        "Для быстрого поиска товара в любом чате набери:\n"
+        "`@ТвойБот <часть названия товара>` и выбери товар из подсказок."
+    )
+    await message.answer(text, reply_markup=main_menu_kb(), parse_mode="Markdown")
 
-# --- Add product ---
-@dp.message(Text("➕ Mahsulot qo‘shish"))
+# --- Добавление товара ---
+@dp.message(Text("➕ Добавить товар"))
 async def start_add(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return await message.answer("⛔ Ruxsat yo‘q")
     await state.set_state(AddProductStates.waiting_for_input)
-    await message.answer("Mahsulot: nomi, miqdori, narxi\nMisol: Olma, 10, 5000")
+    await message.answer(
+        "Отправь товар в формате: название, количество, цена или просто пришли название и мы спросим дальше.",
+        parse_mode="Markdown"
+    )
 
 @dp.message(AddProductStates.waiting_for_input)
 async def process_add_input(message: types.Message, state: FSMContext):
-    parts = [p.strip() for p in message.text.split(",")]
+    text = message.text.strip()
+    parts = [p.strip() for p in text.split(",")]
     try:
-        name, qty, price = parts[0], int(parts[1]), Decimal(parts[2])
+        if len(parts) == 3:
+            name = parts[0]
+            qty = int(parts[1])
+            price = Decimal(parts[2])
+        else:
+            await message.answer(
+                "Похоже, формат другой. Введи в формате название, количество, цена (например: Яблоко, 10, 1.50)."
+            )
+            return
     except Exception:
-        return await message.answer("❌ Format noto‘g‘ri. Misol: Olma, 10, 5000")
+        await message.answer("Ошибка в формате данных. Попробуй ещё раз.")
+        return
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id FROM products WHERE name=$1", name)
-        if row:
-            await conn.execute("UPDATE products SET quantity=quantity+$1, price=$2, updated_at=now() WHERE id=$3",
-                               qty, price, row["id"])
-            await message.answer(f"✅ {name} yangilandi (+{qty} dona, narx {price})")
+        product = await conn.fetchrow("SELECT id FROM products WHERE name=$1", name)
+        if product:
+            await conn.execute(
+                "UPDATE products SET quantity=quantity+$1, price=$2 WHERE id=$3",
+                qty, price, product['id']
+            )
+            await message.answer(f"Обновлён товар: {name} — добавлено {qty} шт., цена обновлена до {price}")
         else:
-            await conn.execute("INSERT INTO products(name, quantity, price) VALUES($1,$2,$3)", name, qty, price)
-            await message.answer(f"✅ Yangi mahsulot qo‘shildi: {name}, {qty} dona, {price}")
+            await conn.execute(
+                "INSERT INTO products(name, quantity, price) VALUES($1, $2, $3)",
+                name, qty, price
+            )
+            await message.answer(f"Добавлен новый товар: {name}, количество: {qty}, цена: {price}")
     await state.clear()
 
-# --- Sotish ---
-@dp.message(Text("🛒 Sotish"))
-async def start_sell(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return await message.answer("⛔ Ruxsat yo‘q")
-    await message.answer("Mahsulot nomini yozing (qidiruv):")
+# --- Статистика ---
+@dp.message(Text("📊 Статистика"))
+async def show_stats(message: types.Message):
+    async with db_pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COALESCE(SUM(total), 0) FROM sales")
+    await message.answer(f"Общий доход: {total} у.е.")
 
-@dp.message()
-async def sell_search(message: types.Message):
-    if not is_admin(message.from_user.id):
+# --- Продажа товара ---
+@dp.message(Text("🛒 Продать товар"))
+async def start_sell(message: types.Message, state: FSMContext):
+    await state.set_state(SellStates.waiting_for_product)
+    async with db_pool.acquire() as conn:
+        products = await conn.fetch("SELECT name FROM products")
+    if not products:
+        await message.answer("Нет товаров для продажи. Сначала добавьте товар.")
+        await state.clear()
         return
-    q = message.text.strip().lower()
-    if not q:
-        return
-    rows = await db_pool.fetch("SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 LIMIT 5", f"%{q}%")
-    if not rows:
-        return await message.answer("❌ Mahsulot topilmadi.")
-    for r in rows:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")]
-        ])
-        await message.answer(f"{r['name']} — {r['quantity']} ta, narxi {r['price']}", reply_markup=kb)
+    # Здесь пользователь вводит название вручную
+    await message.answer(
+        "Введите название товара для продажи полностью (можно скопировать из инлайн подсказок)."
+    )
 
-# --- Callback sotib olish ---
-@dp.callback_query(F.data.startswith("buy:"))
-async def handle_buy(call: types.CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer("⛔ Ruxsat yo‘q", show_alert=True)
-    product_id = int(call.data.split(":")[1])
-    row = await db_pool.fetchrow("SELECT id, name, quantity, price FROM products WHERE id=$1", product_id)
-    if not row:
-        return await call.answer("❌ Topilmadi", show_alert=True)
-    if row["quantity"] <= 0:
-        return await call.answer("❌ Omborda qolmagan", show_alert=True)
+# --- Обработка продажи товара ---
+@dp.message(StateFilter(SellStates.waiting_for_product))
+async def process_sell_product(message: types.Message, state: FSMContext):
+    product_name = message.text.strip()
+    async with db_pool.acquire() as conn:
+        product = await conn.fetchrow("SELECT * FROM products WHERE name=$1", product_name)
+    if not product:
+        await message.answer("Товар не найден. Попробуйте другое название или воспользуйтесь инлайн поиском.")
+        return
+    await state.update_data(product=product)
+    await state.set_state(SellStates.waiting_for_quantity)
+    await message.answer(f"Вы выбрали: {product_name}\nВведите количество для продажи (в наличии {product['quantity']})")
+
+@dp.message(SellStates.waiting_for_quantity)
+async def process_sell_quantity(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    product = data['product']
+    try:
+        qty = int(message.text.strip())
+        if qty <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("Введите корректное положительное число для количества.")
+        return
+    if qty > product['quantity']:
+        await message.answer(f"Недостаточно товара. В наличии {product['quantity']} шт.")
+        return
+    await state.update_data(quantity=qty)
+    await state.set_state(SellStates.waiting_for_client_name)
+    await message.answer("Введите имя клиента")
+
+@dp.message(SellStates.waiting_for_client_name)
+async def process_client_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("Имя клиента не может быть пустым. Попробуйте ещё раз.")
+        return
+    await state.update_data(client_name=name)
+    await state.set_state(SellStates.waiting_for_client_phone)
+    await message.answer("Введите телефон клиента")
+
+@dp.message(SellStates.waiting_for_client_phone)
+async def process_client_phone(message: types.Message, state: FSMContext):
+    phone = message.text.strip()
+    if not phone:
+        await message.answer("Телефон не может быть пустым. Попробуйте ещё раз.")
+        return
+    await state.update_data(client_phone=phone)
+    await state.set_state(SellStates.waiting_for_payment)
+    await message.answer("Выберите способ оплаты", reply_markup=payment_kb())
+
+@dp.message(SellStates.waiting_for_payment)
+async def process_payment(message: types.Message, state: FSMContext):
+    pay_method = message.text.strip()
+    if pay_method not in ["💵 Наличные", "💳 Карта", "📅 В долг"]:
+        await message.answer("Выберите способ оплаты с клавиатуры.")
+        return
+    await state.update_data(payment_method=pay_method)
+    data = await state.get_data()
+    product = data['product']
+    qty = data['quantity']
+    total = Decimal(product['price']) * qty
+    await message.answer(
+        f"Подтвердите продажу:\n\n"
+        f"Товар: {product['name']}\n"
+        f"Количество: {qty}\n"
+        f"Цена за единицу: {product['price']}\n"
+        f"Общая сумма: {total}\n"
+        f"Клиент: {data['client_name']}\n"
+        f"Телефон: {data['client_phone']}\n"
+        f"Оплата: {pay_method}\n\n"
+        f"Напишите 'да' для подтверждения или 'отмена' для отмены."
+    )
+    await state.set_state(SellStates.confirm)
+
+@dp.message(SellStates.confirm)
+async def process_confirm(message: types.Message, state: FSMContext):
+    text = message.text.strip().lower()
+    if text == "да":
+        data = await state.get_data()
+        product = data['product']
+        qty = data['quantity']
+        client_name = data['client_name']
+        client_phone = data['client_phone']
+        payment_method = data['payment_method']
+        total = Decimal(product['price']) * qty
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                product['id'], qty, product['price'], total,
+                client_name, client_phone, payment_method, datetime.now()
+            )
+            await conn.execute(
+                "UPDATE products SET quantity=quantity-$1 WHERE id=$2",
+                qty, product['id']
+            )
+        await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
+        await state.clear()
+    elif text == "отмена":
+        await message.answer("Операция отменена.", reply_markup=main_menu_kb())
+        await state.clear()
+    else:
+        await message.answer("Напишите 'да' для подтверждения или 'отмена' для отмены.")
+
+# --- Inline Query Handler (для поиска товаров в любом чате) ---
+@dp.inline_handler()
+async def inline_query_handler(inline_query: InlineQuery):
+    query = inline_query.query.strip().lower()
+    if not query:
+        await inline_query.answer(results=[], cache_time=1)
+        return
 
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)",
-                           row["id"], 1, row["price"], row["price"], datetime.utcnow(), call.from_user.id)
-        await conn.execute("UPDATE products SET quantity=quantity-1, updated_at=now() WHERE id=$1", row["id"])
+        rows = await conn.fetch(
+            "SELECT id, name, price, quantity FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10",
+            f"%{query}%"
+        )
 
-    await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {row['quantity']-1} ta")
-    await call.answer("✅ Sotildi")
+    results = []
+    for product in rows:
+        msg_text = (
+            f"Товар: {product['name']}\n"
+            f"Цена: {product['price']} у.е.\n"
+            f"В наличии: {product['quantity']} шт."
+        )
+        result_id = hashlib.md5(f"{product['id']}".encode()).hexdigest()
 
-# --- Hisobot ---
-@dp.message(Text("📊 Hisobot"))
-async def stats_handler(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    async with db_pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales")
-    await message.answer(f"📊 Umumiy savdo: {total}")
+        results.append(
+            InlineQueryResultArticle(
+                id=result_id,
+                title=product['name'],
+                input_message_content=InputTextMessageContent(message_text=msg_text),
+                description=f"Цена: {product['price']}, В наличии: {product['quantity']}",
+            )
+        )
 
-# --- Run ---
+    await inline_query.answer(results=results, cache_time=10, is_personal=True)
+
+# --- Запуск бота ---
 async def main():
     global db_pool
     db_pool = await init_db_pool()
+    print("Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot to‘xtatildi")
+    asyncio.run(main())
