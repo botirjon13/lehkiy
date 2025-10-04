@@ -1,320 +1,371 @@
 #!/usr/bin/env python3
-# bot.py
+
+# bot_working.py
+
+# Ishlaydigan CRM bot — o'zbekcha. Aiogram 3.x bilan mos.
 
 import os
+import io
 import asyncio
+import logging
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
-import hashlib
-
-load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
-from aiogram.filters import Text
-from aiogram.filters.state import StateFilter
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command, Text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
+from aiogram.types import (
+KeyboardButton, ReplyKeyboardMarkup,
+InlineKeyboardMarkup, InlineKeyboardButton,
+FSInputFile
+)
 
-# Проверяем переменные окружения
+# --- Logging ---
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(**name**)
+
+# --- Env ---
+
+load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+ADMINS = [int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError("TELEGRAM_TOKEN and DATABASE_URL must be set in environment variables")
+raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
+
+# --- Bot & Dispatcher ---
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- DB helpers ---
-async def init_db_pool():
-    pool = await asyncpg.create_pool(DATABASE_URL)
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            quantity INT NOT NULL,
-            price NUMERIC(10,2) NOT NULL
-        );
-        """)
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sales (
-            id SERIAL PRIMARY KEY,
-            product_id INT REFERENCES products(id),
-            quantity INT NOT NULL,
-            price NUMERIC(10,2) NOT NULL,
-            total NUMERIC(10,2) NOT NULL,
-            client_name TEXT,
-            client_phone TEXT,
-            payment_method TEXT,
-            sale_date TIMESTAMP NOT NULL
-        );
-        """)
-    return pool
+# --- DB pool ---
 
 db_pool: asyncpg.pool.Pool | None = None
 
+async def init_db_pool():
+try:
+pool = await asyncpg.create_pool(DATABASE_URL)
+async with pool.acquire() as conn:
+# kerakli ustunlarni yaratish (mavjud bo'lsa saqlaydi)
+await conn.execute(
+"""
+CREATE TABLE IF NOT EXISTS products (
+id SERIAL PRIMARY KEY,
+name TEXT UNIQUE NOT NULL,
+quantity INT NOT NULL DEFAULT 0,
+price NUMERIC(12,2) NOT NULL DEFAULT 0,
+created_at TIMESTAMP DEFAULT now(),
+updated_at TIMESTAMP DEFAULT now()
+);
+"""
+)
+await conn.execute(
+"""
+CREATE TABLE IF NOT EXISTS sales (
+id SERIAL PRIMARY KEY,
+product_id INT REFERENCES products(id),
+quantity INT NOT NULL,
+price NUMERIC(12,2) NOT NULL,
+total NUMERIC(14,2) NOT NULL,
+client_name TEXT,
+client_phone TEXT,
+payment_method TEXT,
+sale_date TIMESTAMP NOT NULL,
+seller_id BIGINT
+);
+"""
+)
+logger.info("DB pool tayyor")
+return pool
+except Exception:
+logger.exception("DB pool yaratishda xato")
+raise
+
+# --- Helpers ---
+
+def is_admin(user_id: int) -> bool:
+if not ADMINS:
+return False
+return user_id in ADMINS
+
 # --- FSM states ---
+
 class AddProductStates(StatesGroup):
-    waiting_for_input = State()
+waiting_for_input = State()
 
 class SellStates(StatesGroup):
-    waiting_for_product = State()
-    waiting_for_quantity = State()
-    waiting_for_client_name = State()
-    waiting_for_client_phone = State()
-    waiting_for_payment = State()
-    confirm = State()
+waiting_for_query = State()
 
 # --- Keyboards ---
+
 def main_menu_kb():
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="➕ Добавить товар")],
-        [KeyboardButton(text="🛒 Продать товар")],
-        [KeyboardButton(text="📊 Статистика")],
-    ], resize_keyboard=True)
-    return kb
+return ReplyKeyboardMarkup(
+keyboard=[
+[KeyboardButton(text="➕ Mahsulot qo‘shish")],
+[KeyboardButton(text="🛒 Sotish")],
+[KeyboardButton(text="📊 Hisobot")],
+],
+resize_keyboard=True
+)
 
 def payment_kb():
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="💵 Наличные"), KeyboardButton(text="💳 Карта")],
-        [KeyboardButton(text="📅 В долг")],
-    ], resize_keyboard=True, one_time_keyboard=True)
-    return kb
+return ReplyKeyboardMarkup(
+keyboard=[
+[KeyboardButton(text="💵 Naqd"), KeyboardButton(text="💳 Karta")],
+[KeyboardButton(text="📅 Qarzga")],
+],
+resize_keyboard=True,
+one_time_keyboard=True
+)
 
 # --- Handlers ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    text = (
-        "Привет! Я простой CRM-бот.\n\n"
-        "Доступные команды:\n"
-        "➕ Добавить товар — добавить/обновить товар (формат: название,количество,цена) или нажми кнопку\n"
-        "🛒 Продать товар — оформить продажу\n"
-        "📊 Статистика — показать общий доход\n\n"
-        "Пример добавления в одной строке:\n"
-        "`Яблоко, 10, 1.50`\n\n"
-        "Для быстрого поиска товара в любом чате набери:\n"
-        "`@ТвойБот <часть названия товара>` и выбери товар из подсказок."
-    )
-    await message.answer(text, reply_markup=main_menu_kb(), parse_mode="Markdown")
+if not is_admin(message.from_user.id):
+await message.answer("⛔ Sizda bu botdan foydalanish huquqi yo'q.")
+return
+await state.clear()
+await message.answer(
+"Salom! CRM bot ishga tayyor.\n\n"
+"➕ Mahsulot qo‘shish — yangi mahsulot qo‘shish yoki yangilash\n"
+"🛒 Sotish — mahsulotni qidirib sotish va sotish\n"
+"📊 Hisobot — kun/oy/yil bo‘yicha hisobot\n\n"
+"Misol: mahsulot qo‘shish uchun: `Olma, 10, 5000`",
+reply_markup=main_menu_kb()
+)
 
-# --- Добавление товара ---
-@dp.message(Text("➕ Добавить товар"))
+# --- Add product ---
+
+@dp.message(Text("➕ Mahsulot qo‘shish"))
 async def start_add(message: types.Message, state: FSMContext):
-    await state.set_state(AddProductStates.waiting_for_input)
-    await message.answer(
-        "Отправь товар в формате: название, количество, цена или просто пришли название и мы спросим дальше.",
-        parse_mode="Markdown"
-    )
+if not is_admin(message.from_user.id):
+await message.answer("⛔ Sizda ruxsat yo'q.")
+return
+await state.set_state(AddProductStates.waiting_for_input)
+await message.answer("Mahsulotni yuboring: nomi, miqdori, narxi\nMisol: Olma, 10, 5000")
 
 @dp.message(AddProductStates.waiting_for_input)
 async def process_add_input(message: types.Message, state: FSMContext):
-    text = message.text.strip()
-    parts = [p.strip() for p in text.split(",")]
-    try:
-        if len(parts) == 3:
-            name = parts[0]
-            qty = int(parts[1])
-            price = Decimal(parts[2])
-        else:
-            await message.answer(
-                "Похоже, формат другой. Введи в формате название, количество, цена (например: Яблоко, 10, 1.50)."
-            )
-            return
-    except Exception:
-        await message.answer("Ошибка в формате данных. Попробуй ещё раз.")
-        return
+text = message.text.strip()
+parts = [p.strip() for p in text.split(",")]
+try:
+if len(parts) != 3:
+raise ValueError("Format noto'g'ri")
+name = parts[0]
+qty = int(parts[1])
+price = Decimal(parts[2].replace(" ", ""))
+except Exception:
+await message.answer("❌ Format notoʻgʻri. Misol: Olma, 10, 5000")
+return
 
+```
+try:
     async with db_pool.acquire() as conn:
-        product = await conn.fetchrow("SELECT id FROM products WHERE name=$1", name)
-        if product:
+        row = await conn.fetchrow("SELECT id FROM products WHERE name=$1", name)
+        if row:
             await conn.execute(
-                "UPDATE products SET quantity=quantity+$1, price=$2 WHERE id=$3",
-                qty, price, product['id']
+                "UPDATE products SET quantity = quantity + $1, price = $2, updated_at = now() WHERE id = $3",
+                qty, price, row["id"]
             )
-            await message.answer(f"Обновлён товар: {name} — добавлено {qty} шт., цена обновлена до {price}")
+            await message.answer(f"✅ {name} yangilandi: +{qty}, narxi: {price}")
         else:
             await conn.execute(
-                "INSERT INTO products(name, quantity, price) VALUES($1, $2, $3)",
+                "INSERT INTO products(name, quantity, price) VALUES($1,$2,$3)",
                 name, qty, price
             )
-            await message.answer(f"Добавлен новый товар: {name}, количество: {qty}, цена: {price}")
+            await message.answer(f"✅ Yangi mahsulot qoʻshildi: {name}, {qty} dona, {price}")
+except Exception:
+    logger.exception("Add product DB error")
+    await message.answer("⚠️ Bazaga yozishda xatolik yuz berdi.")
+finally:
     await state.clear()
+```
 
-# --- Статистика ---
-@dp.message(Text("📊 Статистика"))
-async def show_stats(message: types.Message):
-    async with db_pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COALESCE(SUM(total), 0) FROM sales")
-    await message.answer(f"Общий доход: {total} у.е.")
+# --- Start selling (set state) ---
 
-# --- Продажа товара ---
-@dp.message(Text("🛒 Продать товар"))
+@dp.message(Text("🛒 Sotish"))
 async def start_sell(message: types.Message, state: FSMContext):
-    await state.set_state(SellStates.waiting_for_product)
-    async with db_pool.acquire() as conn:
-        products = await conn.fetch("SELECT name FROM products")
-    if not products:
-        await message.answer("Нет товаров для продажи. Сначала добавьте товар.")
-        await state.clear()
-        return
-    # Здесь пользователь вводит название вручную
-    await message.answer(
-        "Введите название товара для продажи полностью (можно скопировать из инлайн подсказок)."
+if not is_admin(message.from_user.id):
+await message.answer("⛔ Sizda ruxsat yo'q.")
+return
+await state.set_state(SellStates.waiting_for_query)
+await message.answer("Mahsulot nomini kiriting (qidiruv):")
+
+# --- Search handler (only in sell state) ---
+
+@dp.message(SellStates.waiting_for_query)
+async def sell_search(message: types.Message, state: FSMContext):
+q = message.text.strip()
+if not q:
+await message.answer("Iltimos, mahsulot nomini yozing.")
+return
+
+```
+try:
+    rows = await db_pool.fetch(
+        "SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10",
+        f"%{q.lower()}%"
     )
+except Exception:
+    logger.exception("DB error on search")
+    await message.answer("⚠️ Bazadan ma'lumot olishda xatolik yuz berdi.")
+    await state.clear()
+    return
 
-# --- Обработка продажи товара ---
-@dp.message(StateFilter(SellStates.waiting_for_product))
-async def process_sell_product(message: types.Message, state: FSMContext):
-    product_name = message.text.strip()
+if not rows:
+    await message.answer("🔎 Mahsulot topilmadi.")
+    await state.clear()
+    return
+
+for r in rows:
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")]
+        ]
+    )
+    await message.answer(f"{r['name']} — {r['quantity']} ta, narxi: {r['price']}", reply_markup=kb)
+
+# clear state so normal flow continues (or keep if you want multiple searches)
+await state.clear()
+```
+
+# --- Buy callback ---
+
+@dp.callback_query(F.data.startswith("buy:"))
+async def handle_buy(call: types.CallbackQuery):
+# prevent non-admin usage
+if not is_admin(call.from_user.id):
+await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
+return
+
+```
+# parse id
+try:
+    product_id = int(call.data.split(":", 1)[1])
+except Exception:
+    await call.answer("Noto'g'ri ma'lumot", show_alert=True)
+    return
+
+# load product
+try:
+    row = await db_pool.fetchrow("SELECT id, name, quantity, price FROM products WHERE id=$1", product_id)
+except Exception:
+    logger.exception("DB error on fetch product")
+    await call.answer("⚠️ Xatolik yuz berdi", show_alert=True)
+    return
+
+if not row:
+    await call.answer("❌ Mahsulot topilmadi", show_alert=True)
+    return
+
+if row["quantity"] <= 0:
+    await call.answer("❌ Omborda mahsulot qolmagan", show_alert=True)
+    return
+
+# perform transaction: insert sale, decrement stock
+try:
     async with db_pool.acquire() as conn:
-        product = await conn.fetchrow("SELECT * FROM products WHERE name=$1", product_name)
-    if not product:
-        await message.answer("Товар не найден. Попробуйте другое название или воспользуйтесь инлайн поиском.")
-        return
-    await state.update_data(product=product)
-    await state.set_state(SellStates.waiting_for_quantity)
-    await message.answer(f"Вы выбрали: {product_name}\nВведите количество для продажи (в наличии {product['quantity']})")
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)",
+                row["id"], 1, row["price"], row["price"], datetime.now(timezone.utc), call.from_user.id
+            )
+            await conn.execute(
+                "UPDATE products SET quantity = quantity - 1, updated_at = now() WHERE id = $1",
+                row["id"]
+            )
+except Exception:
+    logger.exception("DB error on buy/transaction")
+    # ensure Telegram client loading indicator is removed
+    await call.answer("⚠️ Savdoni saqlashda xatolik yuz berdi", show_alert=True)
+    return
 
-@dp.message(SellStates.waiting_for_quantity)
-async def process_sell_quantity(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    product = data['product']
+# Notify — try edit message, fallback to send new message
+remaining = row["quantity"] - 1
+try:
+    await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
+except Exception:
     try:
-        qty = int(message.text.strip())
-        if qty <= 0:
-            raise ValueError()
-    except ValueError:
-        await message.answer("Введите корректное положительное число для количества.")
-        return
-    if qty > product['quantity']:
-        await message.answer(f"Недостаточно товара. В наличии {product['quantity']} шт.")
-        return
-    await state.update_data(quantity=qty)
-    await state.set_state(SellStates.waiting_for_client_name)
-    await message.answer("Введите имя клиента")
+        await call.message.answer(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
+    except Exception:
+        logger.exception("Failed to send confirmation message")
 
-@dp.message(SellStates.waiting_for_client_name)
-async def process_client_name(message: types.Message, state: FSMContext):
-    name = message.text.strip()
-    if not name:
-        await message.answer("Имя клиента не может быть пустым. Попробуйте ещё раз.")
-        return
-    await state.update_data(client_name=name)
-    await state.set_state(SellStates.waiting_for_client_phone)
-    await message.answer("Введите телефон клиента")
+# Stop loading spinner in client
+await call.answer("✅ Sotib olindi")
+```
 
-@dp.message(SellStates.waiting_for_client_phone)
-async def process_client_phone(message: types.Message, state: FSMContext):
-    phone = message.text.strip()
-    if not phone:
-        await message.answer("Телефон не может быть пустым. Попробуйте ещё раз.")
-        return
-    await state.update_data(client_phone=phone)
-    await state.set_state(SellStates.waiting_for_payment)
-    await message.answer("Выберите способ оплаты", reply_markup=payment_kb())
+# --- Stats handler ---
 
-@dp.message(SellStates.waiting_for_payment)
-async def process_payment(message: types.Message, state: FSMContext):
-    pay_method = message.text.strip()
-    if pay_method not in ["💵 Наличные", "💳 Карта", "📅 В долг"]:
-        await message.answer("Выберите способ оплаты с клавиатуры.")
-        return
-    await state.update_data(payment_method=pay_method)
-    data = await state.get_data()
-    product = data['product']
-    qty = data['quantity']
-    total = Decimal(product['price']) * qty
-    await message.answer(
-        f"Подтвердите продажу:\n\n"
-        f"Товар: {product['name']}\n"
-        f"Количество: {qty}\n"
-        f"Цена за единицу: {product['price']}\n"
-        f"Общая сумма: {total}\n"
-        f"Клиент: {data['client_name']}\n"
-        f"Телефон: {data['client_phone']}\n"
-        f"Оплата: {pay_method}\n\n"
-        f"Напишите 'да' для подтверждения или 'отмена' для отмены."
-    )
-    await state.set_state(SellStates.confirm)
+@dp.message(Text("📊 Hisobot"))
+async def stats_handler(message: types.Message):
+if not is_admin(message.from_user.id):
+await message.answer("⛔ Sizda ruxsat yo'q.")
+return
 
-@dp.message(SellStates.confirm)
-async def process_confirm(message: types.Message, state: FSMContext):
-    text = message.text.strip().lower()
-    if text == "да":
-        data = await state.get_data()
-        product = data['product']
-        qty = data['quantity']
-        client_name = data['client_name']
-        client_phone = data['client_phone']
-        payment_method = data['payment_method']
-        total = Decimal(product['price']) * qty
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                product['id'], qty, product['price'], total,
-                client_name, client_phone, payment_method, datetime.now()
-            )
-            await conn.execute(
-                "UPDATE products SET quantity=quantity-$1 WHERE id=$2",
-                qty, product['id']
-            )
-        await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
-        await state.clear()
-    elif text == "отмена":
-        await message.answer("Операция отменена.", reply_markup=main_menu_kb())
-        await state.clear()
-    else:
-        await message.answer("Напишите 'да' для подтверждения или 'отмена' для отмены.")
-
-# --- Inline Query Handler (для поиска товаров в любом чате) ---
-@dp.inline_handler()
-async def inline_query_handler(inline_query: InlineQuery):
-    query = inline_query.query.strip().lower()
-    if not query:
-        await inline_query.answer(results=[], cache_time=1)
-        return
-
+```
+try:
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, name, price, quantity FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10",
-            f"%{query}%"
-        )
+        total = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales")
+        today = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE DATE(sale_date) = CURRENT_DATE")
+        month = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE DATE_TRUNC('month', sale_date) = DATE_TRUNC('month', CURRENT_DATE)")
+        year = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE DATE_TRUNC('year', sale_date) = DATE_TRUNC('year', CURRENT_DATE)")
+        my_total = await conn.fetchval("SELECT COALESCE(SUM(total),0) FROM sales WHERE seller_id=$1", message.from_user.id)
+except Exception:
+    logger.exception("Stats DB error")
+    await message.answer("⚠️ Statistikani olishda xatolik yuz berdi.")
+    return
 
-    results = []
-    for product in rows:
-        msg_text = (
-            f"Товар: {product['name']}\n"
-            f"Цена: {product['price']} у.е.\n"
-            f"В наличии: {product['quantity']} шт."
-        )
-        result_id = hashlib.md5(f"{product['id']}".encode()).hexdigest()
+text = (
+    f"📊 Savdo statistikasi:\n\n"
+    f"💰 Umumiy daromad: {total}\n"
+    f"📅 Bugungi: {today}\n"
+    f"🗓 Oylik: {month}\n"
+    f"📆 Yillik: {year}\n\n"
+    f"👤 Sizning umumiy savdolaringiz: {my_total}"
+)
+await message.answer(text)
 
-        results.append(
-            InlineQueryResultArticle(
-                id=result_id,
-                title=product['name'],
-                input_message_content=InputTextMessageContent(message_text=msg_text),
-                description=f"Цена: {product['price']}, В наличии: {product['quantity']}",
-            )
-        )
+# Grafik yuborish (katta yuklamaslik uchun oddiy bar)
+try:
+    labels = ["Bugungi", "Oylik", "Yillik"]
+    values = [float(today), float(month), float(year)]
+    plt.figure(figsize=(6,4))
+    bars = plt.bar(labels, values)
+    for bar in bars:
+        h = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, h, f"{h:.2f}", ha="center", va="bottom")
+    plt.title("Savdo statistikasi")
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    plt.close()
+    await message.answer_photo(photo=FSInputFile(buf, filename="stats.png"), caption="Grafik")
+except Exception:
+    logger.exception("Chart error (ignored)")
+```
 
-    await inline_query.answer(results=results, cache_time=10, is_personal=True)
+# --- Run ---
 
-# --- Запуск бота ---
 async def main():
-    global db_pool
-    db_pool = await init_db_pool()
-    print("Бот запущен")
-    await dp.start_polling(bot)
+global db_pool
+db_pool = await init_db_pool()
+logger.info("Bot ishga tushmoqda...")
+await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if **name** == "**main**":
+try:
+asyncio.run(main())
+except (KeyboardInterrupt, SystemExit):
+logger.info("Bot to'xtatildi")
