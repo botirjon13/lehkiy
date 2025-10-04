@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# bot_text_search_cart.py
-# O‘zbekcha CRM bot — mahsulot qidiruv, savatcha bilan sotish, hisobot
+# bot_cart.py
+# CRM bot — mahsulot qidiruv, sotish, savatcha va hisobot
 
 import os
 import io
@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, Text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -96,14 +96,23 @@ def main_menu_kb():
         keyboard=[
             [KeyboardButton(text="➕ Mahsulot qo‘shish")],
             [KeyboardButton(text="🛒 Sotish")],
-            [KeyboardButton(text="🛒 Savatcha")],
             [KeyboardButton(text="📊 Hisobot")],
         ],
         resize_keyboard=True
     )
 
-# --- Savatcha (memory) ---
-user_cart: dict[int, list[dict]] = {}
+def payment_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💵 Naqd"), KeyboardButton(text="💳 Karta")],
+            [KeyboardButton(text="📅 Qarzga")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+# --- User carts ---
+user_cart: dict[int, list[dict]] = {}  # user_id -> list of {'id','name','price'}
 
 # --- Handlers ---
 @dp.message(Command('start'))
@@ -117,7 +126,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Buyruqlar:\n"
         "➕ Mahsulot qo'shish — yangi mahsulot qo'shish yoki yangilash\n"
         "🛒 Sotish — mahsulotni qidirib savatchaga qo‘shish\n"
-        "🛒 Savatcha — savatchadagi mahsulotlarni ko‘rish va sotish\n"
         "📊 Hisobot — kun/oy/yil bo'yicha hisobot va grafik\n\n"
         "Misol: mahsulot qo'shish uchun `Olma, 10, 5000`\n"
         "Sotish uchun: \"🛒 Sotish\" tugmasini bosing va mahsulot nomini kiriting."
@@ -164,7 +172,7 @@ async def process_add_input(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-# --- Sotish: qidiruv ---
+# --- Sotish: start qidiruv ---
 @dp.message(Text('🛒 Sotish'))
 async def start_sell(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -172,6 +180,7 @@ async def start_sell(message: types.Message):
         return
     await message.answer("Mahsulot nomini yozing (qidirish):")
 
+# --- Sotish: qidiruv va savatchaga qo‘shish tugmalari ---
 @dp.message()
 async def sell_search(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -204,10 +213,15 @@ async def sell_search(message: types.Message):
         await message.answer(f"{r['name']} — {r['quantity']} ta, narxi: {r['price']}", reply_markup=kb)
 
 # --- Callback: savatchaga qo‘shish ---
-@dp.callback_query(F.data.startswith('cart_add:'))
+@dp.callback_query()
 async def add_to_cart(call: types.CallbackQuery):
+    if not call.data or not call.data.startswith("cart_add:"):
+        return
+    if not is_admin(call.from_user.id):
+        return await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
+
     try:
-        product_id = int(call.data.split(':', 1)[1])
+        product_id = int(call.data.split(":", 1)[1])
         row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
     except Exception:
         return await call.answer("Xatolik yuz berdi", show_alert=True)
@@ -218,53 +232,61 @@ async def add_to_cart(call: types.CallbackQuery):
     if row['quantity'] <= 0:
         return await call.answer("Omborda mahsulot yo‘q", show_alert=True)
 
+    # Savatchaga qo'shish
     cart = user_cart.setdefault(call.from_user.id, [])
-    cart.append({'id': row['id'], 'name': row['name'], 'price': row['price']})
-    await call.answer(f"✅ {row['name']} savatchaga qo‘shildi")
+    cart.append({'id': row['id'], 'name': row['name'], 'price': float(row['price'])})
 
-# --- Savatchani ko‘rsatish va sotish ---
-@dp.message(Text("🛒 Savatcha"))
-async def view_cart(message: types.Message):
-    cart = user_cart.get(message.from_user.id, [])
-    if not cart:
-        return await message.answer("Savatcha bo‘sh")
+    # Inline tugmalar: Sotish va Savatchani ko‘rish
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛍 Savatchani ko‘rish", callback_data="view_cart")]
+        ]
+    )
 
-    text_lines = []
-    total = 0
-    for i, item in enumerate(cart, start=1):
-        text_lines.append(f"{i}. {item['name']} — {item['price']}")
-        total += float(item['price'])
+    await call.message.edit_text(f"✅ {row['name']} savatchaga qo‘shildi", reply_markup=kb)
+    await call.answer()
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton(text="💳 Savatchani sotish", callback_data="cart_checkout"))
+# --- Callback: savatchani ko‘rish va yakuniy sotish ---
+@dp.callback_query(lambda c: c.data in ["view_cart", "checkout"])
+async def view_cart(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
 
-    msg = "\n".join(text_lines) + f"\n\nUmumiy: {total:.2f}"
-    await message.answer(msg, reply_markup=kb)
-
-@dp.callback_query(F.data=="cart_checkout")
-async def checkout_cart(call: types.CallbackQuery):
     cart = user_cart.get(call.from_user.id, [])
     if not cart:
         return await call.answer("Savatcha bo‘sh", show_alert=True)
 
-    try:
-        async with db_pool.acquire() as conn:
-            for item in cart:
-                row = await conn.fetchrow('SELECT quantity, price FROM products WHERE id=$1', item['id'])
-                if not row or row['quantity'] <= 0:
-                    continue
-                await conn.execute(
-                    'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
-                    item['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id
-                )
-                await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', item['id'])
-    except Exception:
-        logger.exception('Checkout DB error')
-        return await call.answer("Xatolik yuz berdi", show_alert=True)
+    if call.data == "view_cart":
+        text_lines = []
+        total = 0
+        for i, item in enumerate(cart, 1):
+            text_lines.append(f"{i}. {item['name']} — {item['price']}")
+            total += item['price']
+        text_lines.append(f"\nJami: {total}")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Sotish", callback_data="checkout")]
+            ]
+        )
+        await call.message.edit_text("\n".join(text_lines), reply_markup=kb)
+        await call.answer()
+        return
 
+    # Checkout: savdoni DB ga yozish
+    async with db_pool.acquire() as conn:
+        for item in cart:
+            await conn.execute(
+                'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
+                item['id'], 1, item['price'], item['price'], datetime.utcnow(), call.from_user.id
+            )
+            # Ombordagi miqdorni kamaytirish
+            await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', item['id'])
+
+    # Savatchani bo‘shatish
     user_cart[call.from_user.id] = []
-    await call.message.answer("✅ Savatcha sotildi!")
-    await call.answer("✅ Savatcha sotildi")
+
+    await call.message.edit_text("✅ Savdo yakunlandi! Mahsulotlar sotildi.")
+    await call.answer("✅ Savdo amalga oshirildi.")
 
 # --- Hisobot ---
 @dp.message(Text('📊 Hisobot'))
@@ -293,7 +315,7 @@ async def stats_handler(message: types.Message):
     )
     await message.answer(text)
 
-# --- Run ---
+# --- Run bot ---
 async def main():
     global db_pool
     db_pool = await init_db_pool()
