@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# bot_fixed_aiogram3.py
-# Aiogram 3.x moslashtirilgan, inline qidiruv va sotish ishlaydi
+# bot_text_search.py
+# O‘zbekcha CRM bot — mahsulot qidiruv, sotish, hisobot
 
 import os
 import io
@@ -9,6 +9,7 @@ import logging
 from decimal import Decimal
 from datetime import datetime
 from dotenv import load_dotenv
+import hashlib
 
 import asyncpg
 import matplotlib
@@ -23,10 +24,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     KeyboardButton, ReplyKeyboardMarkup,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
     FSInputFile
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +38,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 ADMINS = [int(x.strip()) for x in os.getenv('ADMINS', '').split(',') if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL sozlanmagan")
+    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
 
 # --- Bot & Dispatcher ---
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -84,7 +83,9 @@ async def init_db_pool():
 
 # --- Helpers ---
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMINS if ADMINS else False
+    if not ADMINS:
+        return False
+    return user_id in ADMINS
 
 # --- FSM states ---
 class AddProductStates(StatesGroup):
@@ -101,16 +102,6 @@ def main_menu_kb():
         resize_keyboard=True
     )
 
-def payment_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="💵 Naqd"), KeyboardButton(text="💳 Karta")],
-            [KeyboardButton(text="📅 Qarzga")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
 # --- Handlers ---
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -122,12 +113,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Salom! CRM botga hush kelibsiz.\n\n"
         "Buyruqlar:\n"
         "➕ Mahsulot qo'shish — yangi mahsulot qo'shish yoki yangilash\n"
-        "🛒 Sotish — mahsulotni qidirib sotish (qulay qidiruv tugmasi mavjud)\n"
+        "🛒 Sotish — mahsulotni qidirib sotish (tugmalar bilan)\n"
         "📊 Hisobot — kun/oy/yil bo'yicha hisobot va grafik\n\n"
         "Misol: mahsulot qo'shish uchun `Olma, 10, 5000`\n"
-        "Sotish uchun: \"🛒 Sotish\" tugmasini bosing va pastdagi \"🔍 Mahsulot qidirish\" tugmasini ishlating."
+        "Sotish uchun: \"🛒 Sotish\" tugmasini bosing va mahsulot nomini kiriting."
     )
-    await message.answer(text, reply_markup=main_menu_kb(), parse_mode='Markdown')
+    await message.answer(text, reply_markup=main_menu_kb())
 
 # --- Add product ---
 @dp.message(Text("➕ Mahsulot qo‘shish"))
@@ -175,45 +166,38 @@ async def start_sell(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Sizda ruxsat yo'q.")
         return
+    await message.answer("Mahsulot nomini yozing (qidirish):")
 
-    # Inline tugma yaratish
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text='🔍 Mahsulot qidirish', switch_inline_query_current_chat='')]
-        ]
-    )
-    await message.answer("Qidirayotgan mahsulotingiz nomining bosh harflarini yozing:", reply_markup=kb)
+@dp.message()
+async def sell_search(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
 
-# --- Inline qidiruv handler ---
-@dp.inline_query()
-async def inline_search(inline_query: InlineQuery):
-    q = inline_query.query.strip()
+    q = message.text.strip().lower()
     if not q:
-        return await inline_query.answer(results=[], cache_time=1)
+        await message.answer("Iltimos, mahsulot nomini kiriting.")
+        return
 
     try:
-        rows = await db_pool.fetch("SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10", f"%{q.lower()}%")
+        rows = await db_pool.fetch(
+            "SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10",
+            f"%{q}%"
+        )
     except Exception:
-        logger.exception('Inline search DB error')
-        return await inline_query.answer(results=[], cache_time=1)
+        logger.exception('DB error')
+        return await message.answer("Bazadan ma'lumot olishda xatolik yuz berdi.")
 
-    results = []
+    if not rows:
+        await message.answer("Mahsulot topilmadi.")
+        return
+
     for r in rows:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")]
             ]
         )
-        msg = f"{r['name']} — narxi: {r['price']} (omborda: {r['quantity']})"
-        results.append(InlineQueryResultArticle(
-            id=str(r['id']),
-            title=r['name'],
-            description=f"{r['quantity']} dona | {r['price']}",
-            input_message_content=InputTextMessageContent(message_text=msg),
-            reply_markup=kb
-        ))
-
-    await inline_query.answer(results=results, cache_time=1, is_personal=True)
+        await message.answer(f"{r['name']} — {r['quantity']} ta, narxi: {r['price']}", reply_markup=kb)
 
 # --- Callback: buy ---
 @dp.callback_query(F.data.startswith('buy:'))
@@ -223,27 +207,41 @@ async def handle_buy(call: types.CallbackQuery):
 
     try:
         product_id = int(call.data.split(':', 1)[1])
-        row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
-        if not row:
-            return await call.answer('Mahsulot topilmadi', show_alert=True)
-        if row['quantity'] <= 0:
-            return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
+    except Exception:
+        return await call.answer("Noto'g'ri ma'lumot", show_alert=True)
 
+    try:
+        row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
+    except Exception:
+        logger.exception('DB error on fetch product')
+        return await call.answer('Xatolik yuz berdi', show_alert=True)
+
+    if not row:
+        return await call.answer('Mahsulot topilmadi', show_alert=True)
+
+    if row['quantity'] <= 0:
+        return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
+
+    try:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
                 row['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id
             )
             await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', row['id'])
-
-        remaining = row['quantity'] - 1
-        await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
-        await call.answer('✅ Sotib olindi')
     except Exception:
         logger.exception('DB error on buy')
-        await call.answer('Savdoni saqlashda xatolik', show_alert=True)
+        return await call.answer('Savdoni saqlashda xatolik', show_alert=True)
 
-# --- Hisobot (kun/oy/yil) + grafik ---
+    remaining = row['quantity'] - 1
+    try:
+        await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
+    except Exception:
+        await call.message.answer(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
+
+    await call.answer('✅ Sotib olindi')
+
+# --- Hisobot ---
 @dp.message(Text('📊 Hisobot'))
 async def stats_handler(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -269,24 +267,6 @@ async def stats_handler(message: types.Message):
         f"👤 Sizning umumiy savdolaringiz: {my_total}"
     )
     await message.answer(text)
-
-    try:
-        labels = ['Bugungi', 'Oylik', 'Yillik']
-        values = [float(today), float(month), float(year)]
-        plt.figure(figsize=(6,4))
-        bars = plt.bar(labels, values)
-        for bar in bars:
-            h = bar.get_height()
-            plt.text(bar.get_x()+bar.get_width()/2, h, f"{h:.2f}", ha='center', va='bottom')
-        plt.title('Savdo statistikasi')
-        plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
-        await message.answer_photo(photo=FSInputFile(buf, filename='stats.png'), caption='Grafik')
-    except Exception:
-        logger.exception('Chart error')
 
 # --- Run ---
 async def main():
