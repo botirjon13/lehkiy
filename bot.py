@@ -408,7 +408,7 @@ async def inline_query_handler(inline_query: InlineQuery):
             f"Narx: {product['price']}\n"
             f"Omborda: {product['quantity']} dona"
         )
-        result_id = hashlib.md5(f"{product['id']}.encode()).hexdigest()
+        result_id = hashlib.md5(f"{product['id']}".encode()).hexdigest()
         # Fix small typing issue above
 
     # Note: building results in a safe way
