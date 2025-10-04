@@ -41,7 +41,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 ADMINS = [int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
+    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
 
 # --- Bot & Dispatcher ---
 
