@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# bot_final.py
-# To'liq ishlaydigan — o'zbekcha, qidiruv tugmachali sotish, statistikalar (kun/oy/yil)
+# bot_fixed_aiogram3.py
+# Aiogram 3.x moslashtirilgan, inline qidiruv va sotish ishlaydi
 
 import os
 import io
@@ -9,7 +9,6 @@ import logging
 from decimal import Decimal
 from datetime import datetime
 from dotenv import load_dotenv
-import hashlib
 
 import asyncpg
 import matplotlib
@@ -25,8 +24,9 @@ from aiogram.types import (
     KeyboardButton, ReplyKeyboardMarkup,
     InlineKeyboardMarkup, InlineKeyboardButton,
     InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
-    CallbackQuery, FSInputFile
+    FSInputFile
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +39,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 ADMINS = [int(x.strip()) for x in os.getenv('ADMINS', '').split(',') if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
+    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL sozlanmagan")
 
 # --- Bot & Dispatcher ---
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -53,9 +53,7 @@ async def init_db_pool():
         pool = await asyncpg.create_pool(DATABASE_URL)
         async with pool.acquire() as conn:
             await conn.execute('''
-            DROP TABLE IF EXISTS sales;
-            DROP TABLE IF EXISTS products;
-            CREATE TABLE products (
+            CREATE TABLE IF NOT EXISTS products (
                 id SERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
                 quantity INT NOT NULL,
@@ -63,7 +61,9 @@ async def init_db_pool():
                 created_at TIMESTAMP DEFAULT now(),
                 updated_at TIMESTAMP DEFAULT now()
             );
-            CREATE TABLE sales (
+            ''')
+            await conn.execute('''
+            CREATE TABLE IF NOT EXISTS sales (
                 id SERIAL PRIMARY KEY,
                 product_id INT REFERENCES products(id),
                 quantity INT NOT NULL,
@@ -99,6 +99,16 @@ def main_menu_kb():
             [KeyboardButton(text="📊 Hisobot")],
         ],
         resize_keyboard=True
+    )
+
+def payment_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💵 Naqd"), KeyboardButton(text="💳 Karta")],
+            [KeyboardButton(text="📅 Qarzga")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
     )
 
 # --- Handlers ---
@@ -148,10 +158,7 @@ async def process_add_input(message: types.Message, state: FSMContext):
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow('SELECT id FROM products WHERE name=$1', name)
             if row:
-                await conn.execute(
-                    'UPDATE products SET quantity=quantity+$1, price=$2, updated_at=now() WHERE id=$3',
-                    qty, price, row['id']
-                )
+                await conn.execute('UPDATE products SET quantity=quantity+$1, price=$2, updated_at=now() WHERE id=$3', qty, price, row['id'])
                 await message.answer(f"✅ {name} yangilandi: +{qty}, narxi: {price}")
             else:
                 await conn.execute('INSERT INTO products(name, quantity, price) VALUES($1,$2,$3)', name, qty, price)
@@ -168,9 +175,12 @@ async def start_sell(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Sizda ruxsat yo'q.")
         return
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        InlineKeyboardButton(text='🔍 Mahsulot qidirish', switch_inline_query_current_chat='')
+
+    # Inline tugma yaratish
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text='🔍 Mahsulot qidirish', switch_inline_query_current_chat='')]
+        ]
     )
     await message.answer("Qidirayotgan mahsulotingiz nomining bosh harflarini yozing:", reply_markup=kb)
 
@@ -180,23 +190,23 @@ async def inline_search(inline_query: InlineQuery):
     q = inline_query.query.strip()
     if not q:
         return await inline_query.answer(results=[], cache_time=1)
+
     try:
-        rows = await db_pool.fetch(
-            "SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10",
-            f"%{q.lower()}%"
-        )
+        rows = await db_pool.fetch("SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT 10", f"%{q.lower()}%")
     except Exception:
         logger.exception('Inline search DB error')
         return await inline_query.answer(results=[], cache_time=1)
 
     results = []
     for r in rows:
-        kb = InlineKeyboardMarkup().add(
-            InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"🛒 Sotib olish ({r['price']})", callback_data=f"buy:{r['id']}")]
+            ]
         )
         msg = f"{r['name']} — narxi: {r['price']} (omborda: {r['quantity']})"
         results.append(InlineQueryResultArticle(
-            id=hashlib.md5(str(r['id']).encode()).hexdigest(),
+            id=str(r['id']),
             title=r['name'],
             description=f"{r['quantity']} dona | {r['price']}",
             input_message_content=InputTextMessageContent(message_text=msg),
@@ -207,51 +217,38 @@ async def inline_search(inline_query: InlineQuery):
 
 # --- Callback: buy ---
 @dp.callback_query(F.data.startswith('buy:'))
-async def handle_buy(call: CallbackQuery):
+async def handle_buy(call: types.CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
 
     try:
         product_id = int(call.data.split(':', 1)[1])
-    except Exception:
-        return await call.answer("Noto'g'ri ma'lumot", show_alert=True)
-
-    try:
         row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
-    except Exception:
-        logger.exception('DB error on fetch product')
-        return await call.answer('Xatolik yuz berdi', show_alert=True)
+        if not row:
+            return await call.answer('Mahsulot topilmadi', show_alert=True)
+        if row['quantity'] <= 0:
+            return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
 
-    if not row:
-        return await call.answer('Mahsulot topilmadi', show_alert=True)
-
-    if row['quantity'] <= 0:
-        return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
-
-    try:
         async with db_pool.acquire() as conn:
             await conn.execute(
                 'INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)',
                 row['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id
             )
             await conn.execute('UPDATE products SET quantity = quantity - 1, updated_at=now() WHERE id=$1', row['id'])
+
+        remaining = row['quantity'] - 1
+        await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
+        await call.answer('✅ Sotib olindi')
     except Exception:
         logger.exception('DB error on buy')
-        return await call.answer('Savdoni saqlashda xatolik', show_alert=True)
-
-    remaining = row['quantity'] - 1
-    try:
-        await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
-    except Exception:
-        await call.message.answer(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
-
-    await call.answer('✅ Sotib olindi')
+        await call.answer('Savdoni saqlashda xatolik', show_alert=True)
 
 # --- Hisobot (kun/oy/yil) + grafik ---
 @dp.message(Text('📊 Hisobot'))
 async def stats_handler(message: types.Message):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔ Sizda ruxsat yo'q.")
+
     try:
         async with db_pool.acquire() as conn:
             total = await conn.fetchval('SELECT COALESCE(SUM(total),0) FROM sales')
@@ -295,7 +292,6 @@ async def stats_handler(message: types.Message):
 async def main():
     global db_pool
     db_pool = await init_db_pool()
-    logger.info('Bot ishga tushmoqda...')
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
