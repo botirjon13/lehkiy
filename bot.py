@@ -9,9 +9,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncpg
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMINS = [123456789]  # Telegram user_id lar
+ADMINS = [1262207928]  # Telegram user_id lar
 
 bot = Bot(TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
