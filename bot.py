@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
-from aiogram.filters import Text
 from aiogram.filters.state import StateFilter
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, Text
@@ -180,7 +179,7 @@ async def process_sell_product(message: types.Message, state: FSMContext):
 
 # --- Новый хендлер для автодополнения ---
 
-@dp.message(StateFilter(SellStates.waiting_for_product), Text())
+@dp.message(StateFilter(SellStates.waiting_for_product))
 async def autocomplete_product_name(message: types.Message, state: FSMContext):
     text = message.text.strip()
     if len(text) < 2:
@@ -260,79 +259,71 @@ async def process_payment(message: types.Message, state: FSMContext):
         f"Клиент: {data['client_name']}\n"
         f"Телефон: {data['client_phone']}\n"
         f"Оплата: {payment}\n"
-        f"Итог: {total:.2f} у.е."
+        f"Итого: {total:.2f} у.е."
     )
-
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="✅ Подтвердить"), KeyboardButton(text="❌ Отмена")]
-    ], resize_keyboard=True, one_time_keyboard=True)
-
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подтвердить", callback_data="confirm_sale")],
+        [InlineKeyboardButton(text="Отмена", callback_data="cancel_sale")],
+    ])
     await state.set_state(SellStates.confirm)
     await message.answer(confirm_text, reply_markup=kb)
 
-@dp.message(SellStates.confirm)
-async def process_confirm(message: types.Message, state: FSMContext):
-    text = message.text.strip()
-    if text == "✅ Подтвердить":
-        data = await state.get_data()
-        product = data['product']
-        quantity = data['quantity']
-        client_name = data['client_name']
-        client_phone = data['client_phone']
-        payment_method = data['payment_method']
-        total = data['total']
-        sale_date = datetime.now()
+@dp.callback_query(Text("confirm_sale"), StateFilter(SellStates.confirm))
+async def confirm_sale(callback_query: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    product = data['product']
+    quantity = data['quantity']
+    client_name = data['client_name']
+    client_phone = data['client_phone']
+    payment_method = data['payment_method']
+    total = data['total']
 
-        async with db_pool.acquire() as conn:
-            current_product = await conn.fetchrow("SELECT * FROM products WHERE id=$1", product['id'])
-            if current_product['quantity'] < quantity:
-                await message.answer(f"Ошибка: недостаточно товара на складе. В наличии {current_product['quantity']} шт.")
-                await state.clear()
-                await message.answer("Продажа отменена.", reply_markup=main_menu_kb())
-                return
-            await conn.execute("UPDATE products SET quantity = quantity - $1 WHERE id = $2", quantity, product['id'])
-            await conn.execute("""
-                INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date)
-                VALUES($1, $2, $3, $4, $5, $6, $7, $8)
-            """, product['id'], quantity, product['price'], total, client_name, client_phone, payment_method, sale_date)
-
-        await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
-        await state.clear()
-    elif text == "❌ Отмена":
-        await message.answer("Продажа отменена.", reply_markup=main_menu_kb())
-        await state.clear()
-    else:
-        await message.answer("Пожалуйста, выберите '✅ Подтвердить' или '❌ Отмена'.")
-
-# --- Функция автодополнения ---
-async def send_product_suggestions(message: types.Message, db_pool, text_prefix: str):
     async with db_pool.acquire() as conn:
-        products = await conn.fetch(
-            "SELECT name FROM products WHERE name ILIKE $1 ORDER BY name LIMIT 10", f"{text_prefix}%"
+        # Проверяем остаток
+        product_db = await conn.fetchrow("SELECT quantity FROM products WHERE id = $1", product['id'])
+        if product_db['quantity'] < quantity:
+            await callback_query.answer("Недостаточно товара для продажи.", show_alert=True)
+            await state.clear()
+            return
+        # Обновляем количество
+        await conn.execute("UPDATE products SET quantity = quantity - $1 WHERE id = $2", quantity, product['id'])
+        # Добавляем запись продажи
+        await conn.execute(
+            "INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            product['id'], quantity, product['price'], Decimal(total), client_name, client_phone, payment_method, datetime.now()
         )
-    if not products:
-        await message.answer("Товары не найдены. Попробуйте другой запрос.")
+    await callback_query.message.answer("Продажа успешно оформлена.")
+    await callback_query.message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_kb())
+    await callback_query.answer()
+    await state.clear()
+
+@dp.callback_query(Text("cancel_sale"), StateFilter(SellStates.confirm))
+async def cancel_sale(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.message.answer("Продажа отменена.", reply_markup=main_menu_kb())
+    await callback_query.answer()
+    await state.clear()
+
+# --- Автодополнение товаров ---
+async def send_product_suggestions(message: types.Message, pool: asyncpg.pool.Pool, text: str):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name FROM products WHERE LOWER(name) LIKE LOWER($1) LIMIT 5", f"%{text}%")
+    if not rows:
+        await message.answer("Совпадений не найдено.")
         return
-
     buttons = [
-        InlineKeyboardButton(text=product['name'], callback_data=f"select_product:{product['name']}")
-        for product in products
+        InlineKeyboardButton(text=record['name'], callback_data=f"select_product:{record['name']}")
+        for record in rows
     ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+    await message.answer("Выберите товар:", reply_markup=kb)
 
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(*buttons)
-
-    await message.answer("Выберите товар из списка:", reply_markup=kb)
-
-# --- Main ---
-
+# --- Основной запуск ---
 async def main():
     global db_pool
     db_pool = await init_db_pool()
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await db_pool.close()
+    print("Бот запущен")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
