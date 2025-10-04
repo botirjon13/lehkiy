@@ -10,25 +10,26 @@ from dotenv import load_dotenv
 load_dotenv()  # Загружаем переменные из .env
 
 import asyncpg
-from aiogram.filters import Text, Command
+from aiogram.filters import Text
 from aiogram.filters.state import StateFilter
 from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 
-# Проверяем переменные окружения
+# Читаем переменные окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError("TELEGRAM_TOKEN and DATABASE_URL must be set in environment variables")
+    raise RuntimeError("TELEGRAM_TOKEN и DATABASE_URL должны быть заданы в переменных окружения")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- DB helpers ---
+# --- Инициализация базы ---
 async def init_db_pool():
     pool = await asyncpg.create_pool(DATABASE_URL)
     async with pool.acquire() as conn:
@@ -57,7 +58,7 @@ async def init_db_pool():
 
 db_pool: asyncpg.pool.Pool | None = None
 
-# --- FSM states ---
+# --- FSM состояния ---
 class AddProductStates(StatesGroup):
     waiting_for_input = State()
 
@@ -69,7 +70,7 @@ class SellStates(StatesGroup):
     waiting_for_payment = State()
     confirm = State()
 
-# --- Keyboards ---
+# --- Клавиатуры ---
 def main_menu_kb():
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Добавить товар")],
@@ -85,7 +86,7 @@ def payment_kb():
     ], resize_keyboard=True, one_time_keyboard=True)
     return kb
 
-# --- Handlers ---
+# --- Обработчики ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -101,12 +102,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode="Markdown")
 
-# --- Добавление товара ---
+# Добавление товара
 @dp.message(Text("➕ Добавить товар"))
 async def start_add(message: types.Message, state: FSMContext):
     await state.set_state(AddProductStates.waiting_for_input)
     await message.answer(
-        "Отправь товар в формате: название, количество, цена или просто пришли название и мы спросим дальше.",
+        "Отправь товар в формате: название, количество, цена (например: Яблоко, 10, 1.50).",
         parse_mode="Markdown"
     )
 
@@ -144,27 +145,19 @@ async def process_add_input(message: types.Message, state: FSMContext):
             await message.answer(f"Добавлен новый товар: {name}, количество: {qty}, цена: {price}")
     await state.clear()
 
-# --- Статистика ---
+# Статистика
 @dp.message(Text("📊 Статистика"))
 async def show_stats(message: types.Message):
     async with db_pool.acquire() as conn:
         total = await conn.fetchval("SELECT COALESCE(SUM(total), 0) FROM sales")
     await message.answer(f"Общий доход: {total} у.е.")
 
-# --- Продажа товара ---
+# Продажа товара с автодополнением
 @dp.message(Text("🛒 Продать товар"))
 async def start_sell(message: types.Message, state: FSMContext):
     await state.set_state(SellStates.waiting_for_product)
-    async with db_pool.acquire() as conn:
-        products = await conn.fetch("SELECT name FROM products")
-    if not products:
-        await message.answer("Нет товаров для продажи. Сначала добавьте товар.")
-        await state.clear()
-        return
-    product_names = '\n'.join([record['name'] for record in products])
-    await message.answer(f"Введите первые буквы товара для поиска.\nДоступные товары:\n{product_names}")
+    await message.answer("Введите первые буквы названия товара для поиска:")
 
-# --- Автодополнение и выбор товара ---
 @dp.message(StateFilter(SellStates.waiting_for_product))
 async def autocomplete_product_name(message: types.Message, state: FSMContext):
     text = message.text.strip()
@@ -183,12 +176,8 @@ async def autocomplete_product_name(message: types.Message, state: FSMContext):
         InlineKeyboardButton(text=product['name'], callback_data=f"select_product:{product['name']}")
         for product in products
     ]
-
-    # Разбиваем кнопки по 2 в ряд
-    inline_keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-
-    kb = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(*buttons)
     await message.answer("Выберите товар из списка:", reply_markup=kb)
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("select_product:"))
@@ -201,7 +190,8 @@ async def process_product_selection(callback_query: types.CallbackQuery, state: 
         return
     await state.update_data(product=product)
     await state.set_state(SellStates.waiting_for_quantity)
-    await bot.send_message(callback_query.from_user.id, f"Вы выбрали: {product_name}\nВведите количество для продажи (доступно: {product['quantity']})")
+    await bot.send_message(callback_query.from_user.id,
+                           f"Вы выбрали: {product_name}\nВведите количество для продажи (доступно: {product['quantity']})")
     await callback_query.answer()
 
 @dp.message(SellStates.waiting_for_quantity)
@@ -297,21 +287,25 @@ async def process_confirm(message: types.Message, state: FSMContext):
                 INSERT INTO sales(product_id, quantity, price, total, client_name, client_phone, payment_method, sale_date)
                 VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """, product['id'], quantity, product['price'], total, client_name, client_phone, payment_method, sale_date)
+
         await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
         await state.clear()
     elif text == "❌ Отмена":
         await message.answer("Продажа отменена.", reply_markup=main_menu_kb())
         await state.clear()
     else:
-        await message.answer("Пожалуйста, подтвердите или отмените операцию кнопками.")
+        await message.answer("Пожалуйста, выберите '✅ Подтвердить' или '❌ Отмена'.")
 
-# --- Запуск ---
+# --- Main ---
+
 async def main():
     global db_pool
-    print("Инициализация базы данных...")
     db_pool = await init_db_pool()
-    print("Бот запущен...")
-    await dp.start_polling(bot)
+    try:
+        print("Бот запущен...")
+        await dp.start_polling(bot)
+    finally:
+        await db_pool.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
