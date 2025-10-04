@@ -294,4 +294,43 @@ async def process_confirm(message: types.Message, state: FSMContext):
                 VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """, product['id'], quantity, product['price'], total, client_name, client_phone, payment_method, sale_date)
 
-        await message.answer("Продажа успешно оформлена!", reply_markup=
+        await message.answer("Продажа успешно оформлена!", reply_markup=main_menu_kb())
+        await state.clear()
+    elif text == "❌ Отмена":
+        await message.answer("Продажа отменена.", reply_markup=main_menu_kb())
+        await state.clear()
+    else:
+        await message.answer("Пожалуйста, выберите '✅ Подтвердить' или '❌ Отмена'.")
+
+# --- Функция автодополнения ---
+async def send_product_suggestions(message: types.Message, db_pool, text_prefix: str):
+    async with db_pool.acquire() as conn:
+        products = await conn.fetch(
+            "SELECT name FROM products WHERE name ILIKE $1 ORDER BY name LIMIT 10", f"{text_prefix}%"
+        )
+    if not products:
+        await message.answer("Товары не найдены. Попробуйте другой запрос.")
+        return
+
+    buttons = [
+        InlineKeyboardButton(text=product['name'], callback_data=f"select_product:{product['name']}")
+        for product in products
+    ]
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(*buttons)
+
+    await message.answer("Выберите товар из списка:", reply_markup=kb)
+
+# --- Main ---
+
+async def main():
+    global db_pool
+    db_pool = await init_db_pool()
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await db_pool.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
