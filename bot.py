@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# bot.py
-# To'liq yangilangan — o'zbekcha, qidiruv tugmachali sotish, statistikalar (kun/oy/yil)
+# bot_fixed.py
+# To'liq to'g'rilangan — o'zbekcha, qidiruv tugmachali sotish, statistikalar (kun/oy/yil)
 
 import os
 import io
@@ -40,7 +40,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 ADMINS = [int(x.strip()) for x in os.getenv('ADMINS', '').split(',') if x.strip()]
 
 if not TELEGRAM_TOKEN or not DATABASE_URL:
-    raise RuntimeError('TELEGRAM_TOKEN va DATABASE_URL muhit o\'zgaruvchilari sozlanmagan')
+    raise RuntimeError("TELEGRAM_TOKEN va DATABASE_URL muhit o'zgaruvchilari sozlanmagan")
 
 # --- Bot & Dispatcher ---
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -50,7 +50,6 @@ dp = Dispatcher(storage=MemoryStorage())
 db_pool: asyncpg.pool.Pool | None = None
 
 async def init_db_pool():
-    # asyncpg will parse sslmode if provided in DATABASE_URL
     try:
         pool = await asyncpg.create_pool(DATABASE_URL)
         async with pool.acquire() as conn:
@@ -87,7 +86,6 @@ async def init_db_pool():
 # --- Helpers ---
 
 def is_admin(user_id: int) -> bool:
-    # Agar ADMINS bo'sh bo'lsa hamma ruxsatli bo'lmasin
     if not ADMINS:
         return False
     return user_id in ADMINS
@@ -107,45 +105,52 @@ class SellStates(StatesGroup):
 # --- Keyboards ---
 
 def main_menu_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton('➕ Mahsulot qo\'shish')],
-        [KeyboardButton('🛒 Sotish')],
-        [KeyboardButton('📊 Hisobot')],
-    ], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Mahsulot qo‘shish")],
+            [KeyboardButton(text="🛒 Sotish")],
+            [KeyboardButton(text="📊 Hisobot")],
+        ],
+        resize_keyboard=True
+    )
 
 
 def payment_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton('💵 Naqd'), KeyboardButton('💳 Karta')],
-        [KeyboardButton('📅 Qarzga')],
-    ], resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="💵 Naqd"), KeyboardButton(text="💳 Karta")],
+            [KeyboardButton(text="📅 Qarzga")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
 # --- Handlers ---
 @dp.message(Command('start'))
 async def cmd_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Sizda bu botdan foydalanish huquqi yo\'q.')
+        await message.answer("⛔ Sizda bu botdan foydalanish huquqi yo'q.")
         return
     await state.clear()
     text = (
-        'Salom! CRM botga hush kelibsiz.\n\n'
-        'Buyruqlar:\n'
-        '➕ Mahsulot qo\'shish — yangi mahsulot qo\'shish yoki yangilash\n'
-        '🛒 Sotish — mahsulotni qidirib sotish (qulay qidiruv tugmasi mavjud)\n'
-        '📊 Hisobot — kun/oy/yil bo\'yicha hisobot va grafik\n\n'
-        'Misol: mahsulot qo\'shish uchun `Olma, 10, 5000`\n'
-        'Sotish uchun: "🛒 Sotish" tugmasini bosing va pastdagi "🔍 Mahsulot qidirish" tugmasini ishlating.'
+        "Salom! CRM botga hush kelibsiz.\n\n"
+        "Buyruqlar:\n"
+        "➕ Mahsulot qo'shish — yangi mahsulot qo'shish yoki yangilash\n"
+        "🛒 Sotish — mahsulotni qidirib sotish (qulay qidiruv tugmasi mavjud)\n"
+        "📊 Hisobot — kun/oy/yil bo'yicha hisobot va grafik\n\n"
+        "Misol: mahsulot qo'shish uchun `Olma, 10, 5000`\n"
+        "Sotish uchun: \"🛒 Sotish\" tugmasini bosing va pastdagi \"🔍 Mahsulot qidirish\" tugmasini ishlating."
     )
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode='Markdown')
 
 # --- Add product ---
-@dp.message(Text("➕ Mahsulot qo'\shish"))
+@dp.message(Text("➕ Mahsulot qo‘shish"))
 async def start_add(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Sizda ruxsat yo\'q.')
+        await message.answer("⛔ Sizda ruxsat yo'q.")
         return
     await state.set_state(AddProductStates.waiting_for_input)
-    await message.answer('Mahsulotni yuboring: nomi, miqdori, narxi\nMisol: Olma, 10, 5000')
+    await message.answer("Mahsulotni yuboring: nomi, miqdori, narxi\nMisol: Olma, 10, 5000")
 
 @dp.message(AddProductStates.waiting_for_input)
 async def process_add_input(message: types.Message, state: FSMContext):
@@ -157,10 +162,10 @@ async def process_add_input(message: types.Message, state: FSMContext):
             qty = int(parts[1])
             price = Decimal(parts[2].replace(' ', ''))
         else:
-            await message.answer('Format noto\'g\'ri. Misol: Olma, 10, 5000')
+            await message.answer("Format noto'g'ri. Misol: Olma, 10, 5000")
             return
     except Exception:
-        await message.answer('Xatolik: ma\'lumotlarni tekshiring.')
+        await message.answer("Xatolik: ma'lumotlarni tekshiring.")
         return
 
     try:
@@ -168,27 +173,26 @@ async def process_add_input(message: types.Message, state: FSMContext):
             row = await conn.fetchrow('SELECT id FROM products WHERE name=$1', name)
             if row:
                 await conn.execute('UPDATE products SET quantity=quantity+$1, price=$2, updated_at=now() WHERE id=$3', qty, price, row['id'])
-                await message.answer(f'✅ {name} yangilandi: +{qty}, narxi: {price}')
+                await message.answer(f"✅ {name} yangilandi: +{qty}, narxi: {price}")
             else:
                 await conn.execute('INSERT INTO products(name, quantity, price) VALUES($1,$2,$3)', name, qty, price)
-                await message.answer(f'✅ Yangi mahsulot qo\'shildi: {name}, {qty} dona, {price}')
+                await message.answer(f"✅ Yangi mahsulot qo'shildi: {name}, {qty} dona, {price}")
     except Exception:
         logger.exception('Add product DB error')
-        await message.answer('Bazaga yozishda xatolik yuz berdi.')
+        await message.answer("Bazaga yozishda xatolik yuz berdi.")
     finally:
         await state.clear()
 
-# --- Sotish: biz pastdagi switch tugmasi orqali inline rejimni chaqiramiz ---
+# --- Sotish: switch_inline_query_current_chat tugmasi ---
 @dp.message(Text('🛒 Sotish'))
 async def start_sell(message: types.Message):
     if not is_admin(message.from_user.id):
-        await message.answer('⛔ Sizda ruxsat yo\'q.')
+        await message.answer("⛔ Sizda ruxsat yo'q.")
         return
-    # switch_inline_query_current_chat="" ochadi va foydalanuvchi faqat qidiruv so'zini yozadi
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='🔍 Mahsulot qidirish', switch_inline_query_current_chat='')]
     ])
-    await message.answer('Qidirayotgan mahsulotingiz nomining bosh harflarini yozing:', reply_markup=kb)
+    await message.answer("Qidirayotgan mahsulotingiz nomining bosh harflarini yozing:", reply_markup=kb)
 
 # --- Inline qidiruv handler ---
 @dp.inline_query()
@@ -223,12 +227,12 @@ async def inline_search(inline_query: InlineQuery):
 @dp.callback_query(F.data.startswith('buy:'))
 async def handle_buy(call: CallbackQuery):
     if not is_admin(call.from_user.id):
-        return await call.answer('⛔ Sizda ruxsat yo\'q.', show_alert=True)
+        return await call.answer("⛔ Sizda ruxsat yo'q.", show_alert=True)
 
     try:
         product_id = int(call.data.split(':', 1)[1])
     except Exception:
-        return await call.answer('Noto\'g\'ri ma\'lumot', show_alert=True)
+        return await call.answer("Noto'g'ri ma'lumot", show_alert=True)
 
     try:
         row = await db_pool.fetchrow('SELECT id, name, quantity, price FROM products WHERE id=$1', product_id)
@@ -242,7 +246,6 @@ async def handle_buy(call: CallbackQuery):
     if row['quantity'] <= 0:
         return await call.answer('Omborda mahsulot qolmagan', show_alert=True)
 
-    # Bu yerda biz oddiy oqim: 1 dona kamaytirish va savdoni yozish
     try:
         async with db_pool.acquire() as conn:
             await conn.execute('INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id) VALUES($1,$2,$3,$4,$5,$6)', row['id'], 1, row['price'], row['price'], datetime.utcnow(), call.from_user.id)
@@ -251,12 +254,10 @@ async def handle_buy(call: CallbackQuery):
         logger.exception('DB error on buy')
         return await call.answer('Savdoni saqlashda xatolik', show_alert=True)
 
-    # Yangilangan ombor sonini olish
     remaining = row['quantity'] - 1
     try:
         await call.message.edit_text(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
     except Exception:
-        # Ba'zan edit_text ishlamasligi mumkin (masalan, xabar o'zgartirilsa) — shunda yangi xabar jo'natamiz
         await call.message.answer(f"✅ {row['name']} sotildi!\nQolgan: {remaining} ta")
 
     await call.answer('✅ Sotib olindi')
@@ -265,7 +266,7 @@ async def handle_buy(call: CallbackQuery):
 @dp.message(Text('📊 Hisobot'))
 async def stats_handler(message: types.Message):
     if not is_admin(message.from_user.id):
-        return await message.answer('⛔ Sizda ruxsat yo\'q.')
+        return await message.answer("⛔ Sizda ruxsat yo'q.")
 
     try:
         async with db_pool.acquire() as conn:
@@ -288,7 +289,6 @@ async def stats_handler(message: types.Message):
     )
     await message.answer(text)
 
-    # Grafik
     try:
         labels = ['Bugungi', 'Oylik', 'Yillik']
         values = [float(today), float(month), float(year)]
