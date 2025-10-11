@@ -255,17 +255,17 @@ def checkout_new_customer_name(m):
     set_state(uid, "action", "checkout_new_customer_phone")
     bot.send_message(m.chat.id, "Telefon raqamini kiriting (+998...):", reply_markup=cancel_keyboard())
     def receipt_text(sale_id):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute(
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
         "SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone "
         "FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,)
-    )
-    s = cur.fetchone()
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
+        )
+        s = cur.fetchone()
+        cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
+        items = cur.fetchall()
+        cur.close()
+        conn.close()
 
     lines = [f"🧾 <b>Chek #{s['id']}</b>",
              f"Sana: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}",
@@ -348,4 +348,3 @@ if name == "__main__":
     init_db()
     print("✅ Bot ishga tushdi!")
     bot.infinity_polling()
-
