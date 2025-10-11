@@ -760,6 +760,25 @@ def export_stock_excel():
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Ombor")
     buf.seek(0); return buf
+    def export_stock_excel():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        df = pd.DataFrame([{"Xabar": "Omborda hech qanday mahsulot yo'q"}])
+    else:
+        df = pd.DataFrame(rows)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Ombor")
+        writer.close()   # 👈 bu satrni qo‘shing
+    buf.seek(0)
+    return buf
 
 def export_stock_pdf():
     conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -776,7 +795,39 @@ def export_stock_pdf():
         if y < 30*mm:
             p.showPage(); y = A4[1] - 20*mm
     p.showPage(); p.save(); buf.seek(0); return buf
+def export_stock_pdf():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
 
+    buf = io.BytesIO()
+    p = canvas.Canvas(buf, pagesize=A4)
+    x = 20*mm
+    y = A4[1] - 20*mm
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(x, y, "Ombor holati")
+    y -= 10*mm
+    p.setFont("Helvetica", 9)
+
+    if not rows:
+        p.drawString(x, y, "Omborda hech qanday mahsulot yo'q.")
+    else:
+        for r in rows:
+            line = f"{r['id']}. {r['name']} — {r['qty']} dona — opt narx: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}"
+            p.drawString(x, y, line)
+            y -= 6*mm
+            if y < 30*mm:
+                p.showPage()
+                y = A4[1] - 20*mm
+
+    p.showPage()
+    p.save()
+    buf.seek(0)
+    return buf
+    
 def stats_pdf_bytes(period):
     buf = io.BytesIO(); p = canvas.Canvas(buf, pagesize=A4)
     p.setFont("Helvetica-Bold", 14); p.drawString(30*mm, A4[1]-30*mm, f"Hisobot: {period}")
