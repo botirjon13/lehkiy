@@ -1,4 +1,4 @@
-# bot.py (to'liq, tuzatilgan va biriktirilgan versiya)
+# bot_jpeg.py (to'liq, tuzatilgan: PDF -> JPEG)
 import os
 import re
 import io
@@ -10,10 +10,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
 
@@ -235,8 +232,6 @@ def add_product_suggest(m):
 # --- Search & Sell (to'liq, aniq) ---
 @bot.message_handler(func=lambda m: m.text and m.text.strip().lower() == "🛒 mahsulot sotish" or (m.text and "mahsulot" in m.text.lower() and "sot" in m.text.lower()))
 def start_sell(m):
-    # This handler is a bit flexible to capture minor text differences
-    # If exact "🛒 Mahsulot sotish" pressed from keyboard, first condition matches.
     uid = m.from_user.id
     clear_state(uid)
     clear_user_cart(uid)
@@ -605,7 +600,10 @@ def checkout_confirm_format(m):
     if fmt == "matn":
         bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
     else:
-        bot.send_document(m.chat.id, receipt_pdf_bytes(sale_id), caption="Sizning chek (PDF)", reply_markup=main_keyboard())
+        # Now we send a JPEG image of the receipt
+        img_buf = receipt_image_bytes(sale_id)
+        img_buf.seek(0)
+        bot.send_photo(m.chat.id, img_buf, caption="Sizning chek (rasm)", reply_markup=main_keyboard())
 
 def receipt_text(sale_id):
     conn = get_conn()
@@ -631,7 +629,34 @@ def receipt_text(sale_id):
     lines.append(f"Do'kon lokatsiyasi: {STORE_LOCATION_NAME}")
     return "\n".join(lines)
 
-def receipt_pdf_bytes(sale_id):
+# ---------- NEW: create JPEG receipts/images instead of PDF ----------
+def _get_font(size=14):
+    """
+    Try to get a truetype font for nicer rendering. Fall back to default.
+    """
+    try:
+        # Common system fonts; adjust path if you have a custom font file in project
+        return ImageFont.truetype("DejaVuSans.ttf", size)
+    except:
+        try:
+            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
+        except:
+            return ImageFont.load_default()
+
+def _text_block_size(draw, lines, font, line_spacing=4):
+    w = 0
+    h = 0
+    for ln in lines:
+        sz = draw.textsize(ln, font=font)
+        if sz[0] > w:
+            w = sz[0]
+        h += sz[1] + line_spacing
+    return w, h
+
+def receipt_image_bytes(sale_id):
+    """
+    Create a JPEG image of the receipt and return BytesIO.
+    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,))
@@ -640,53 +665,110 @@ def receipt_pdf_bytes(sale_id):
     items = cur.fetchall()
     cur.close()
     conn.close()
-    buf = io.BytesIO()
-    p = canvas.Canvas(buf, pagesize=A4)
-    width, height = A4
-    x_margin = 20*mm
-    y = height - 20*mm
-    p.setFont("Helvetica-Bold", 14)
-    p.drawString(x_margin, y, "🧾 Chek")
-    p.setFont("Helvetica", 10)
-    y -= 10*mm
-    p.drawString(x_margin, y, f"Vaqt: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}")
-    y -= 6*mm
-    p.drawString(x_margin, y, f"Do'kon: {STORE_LOCATION_NAME}")
-    y -= 6*mm
-    p.drawString(x_margin, y, f"Sotuvchi: {SELLER_PHONE}")
-    y -= 6*mm
-    p.drawString(x_margin, y, f"Mijoz: {s['cust_name'] or '-'}  {s['cust_phone'] or ''}")
-    y -= 8*mm
-    p.line(x_margin, y, width - x_margin, y)
-    y -= 6*mm
+
+    # build text lines
+    lines = []
+    lines.append("🧾 CHECK")
+    lines.append(f"Vaqt: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}")
+    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
+    lines.append(f"Sotuvchi: {SELLER_PHONE}")
+    lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
+    lines.append("-" * 30)
     for it in items:
-        text = f"{it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}"
-        p.drawString(x_margin, y, text)
-        y -= 6*mm
-        if y < 40*mm:
-            p.showPage()
-            y = height - 20*mm
-    y -= 2*mm
-    p.line(x_margin, y, width - x_margin, y)
-    y -= 8*mm
-    p.setFont("Helvetica-Bold", 12)
-    p.drawString(x_margin, y, f"Jami: {format_money(s['total_amount'])}")
-    y -= 12*mm
-    p.setFont("Helvetica", 10)
-    p.drawString(x_margin, y, f"To'lov turi: {s['payment_type']}")
-    y -= 10*mm
-    p.drawString(x_margin, y, f"Do'kon lokatsiyasi kodi: {STORE_LOCATION_NAME}")
+        lines.append(f"{it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
+    lines.append("-" * 30)
+    lines.append(f"Jami: {format_money(s['total_amount'])}")
+    lines.append(f"To'lov turi: {s['payment_type']}")
+    lines.append(f"Lokatsiya kodi: {STORE_LOCATION_NAME}")
+
+    # font and layout
+    font = _get_font(16)
+    small_font = _get_font(14)
+
+    # prepare temporary draw to compute size
+    temp_img = Image.new("RGB", (800, 2000), "white")
+    draw = ImageDraw.Draw(temp_img)
+    text_w, text_h = _text_block_size(draw, lines, font, line_spacing=6)
+    img_w = max(600, text_w + 40)
+    img_h = text_h + 200
+
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+
+    y = 20
+    for ln in lines:
+        # choose font size for amount line
+        draw.text((20, y), ln, font=font if len(ln) < 60 else small_font, fill="black")
+        y += draw.textsize(ln, font=font if len(ln) < 60 else small_font)[1] + 6
+
+    # add QR at bottom-right
     qr = qrcode.make(f"Store:{STORE_LOCATION_NAME}")
-    qr_io = io.BytesIO()
-    qr.save(qr_io, format="PNG")
-    qr_io.seek(0)
-    p.drawInlineImage(Image.open(qr_io), width - 60*mm, y-10*mm, 40*mm, 40*mm)
-    p.showPage()
-    p.save()
+    qr_size = min(180, img_w // 4)
+    qr = qr.resize((qr_size, qr_size))
+    img.paste(qr, (img_w - qr_size - 20, y + 10))
+
+    # save to bytes
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf
 
-# --- Statistics & Debts (simple implementations) ---
+def export_stock_image():
+    """
+    Create an image representing the stock list (JPEG) and return BytesIO.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    lines = ["Ombor holati"]
+    if not rows:
+        lines.append("Omborda hech qanday mahsulot yo'q.")
+    else:
+        for r in rows:
+            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — opt: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}")
+
+    font = _get_font(16)
+    temp = Image.new("RGB", (1000, 2000), "white")
+    d = ImageDraw.Draw(temp)
+    w, h = _text_block_size(d, lines, font, line_spacing=6)
+    img_w = max(700, w + 40)
+    img_h = h + 40
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+    y = 20
+    for ln in lines:
+        draw.text((20, y), ln, font=font, fill="black")
+        y += draw.textsize(ln, font=font)[1] + 6
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    buf.seek(0)
+    return buf
+
+def stats_image_bytes(period):
+    lines = [f"Hisobot: {period}", f"Sana: {now_str()}", "", "Eslatma: to'liq statistikani yaratish uchun serverda ko'proq ma'lumot yig'ilishi kerak."]
+    font = _get_font(16)
+    temp = Image.new("RGB", (800, 300), "white")
+    d = ImageDraw.Draw(temp)
+    w, h = _text_block_size(d, lines, font, line_spacing=6)
+    img_w = max(600, w + 40)
+    img_h = h + 40
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+    y = 20
+    for ln in lines:
+        draw.text((20, y), ln, font=font, fill="black")
+        y += draw.textsize(ln, font=font)[1] + 6
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    buf.seek(0)
+    return buf
+
+# --- Statistics & Debts (modified to send images instead of PDFs) ---
 @bot.message_handler(func=lambda m: m.text == "📊 Statistika")
 def cmd_statistics(m):
     kb = types.InlineKeyboardMarkup()
@@ -705,37 +787,15 @@ def cb_stat(c):
         bot.send_message(c.message.chat.id, "Sotuv ID ni kiriting:", reply_markup=cancel_keyboard())
     elif cmd in ("stat_daily","stat_monthly","stat_yearly"):
         period = cmd.split("_")[1]
-        pdf = stats_pdf_bytes(period)
-        bot.send_document(c.message.chat.id, pdf, caption=f"{period} hisobot (PDF)")
+        img_buf = stats_image_bytes(period)
+        img_buf.seek(0)
+        bot.send_photo(c.message.chat.id, img_buf, caption=f"{period} hisobot (rasm)")
     elif cmd == "stock_export":
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         kb.row("Excel", "PDF"); kb.row("Bekor qilish")
         set_state(c.from_user.id, "action", "stock_export_choose_format")
         bot.send_message(c.message.chat.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
     bot.answer_callback_query(c.id)
-
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stat_search_by_id")
-def stat_search_by_id(m):
-    uid = m.from_user.id
-    txt = (m.text or "").strip()
-    if txt.lower() == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if not txt.isdigit():
-        bot.send_message(m.chat.id, "Iltimos ID ni son bilan kiriting.", reply_markup=cancel_keyboard()); return
-    sid = int(txt)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name, c.phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sid,))
-    s = cur.fetchone()
-    if not s:
-        bot.send_message(m.chat.id, "Bunday sotuv topilmadi.", reply_markup=main_keyboard()); cur.close(); conn.close(); clear_state(uid); return
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sid,))
-    items = cur.fetchall()
-    cur.close(); conn.close()
-    lines = [f"Sotuv ID: {s['id']}", f"Vaqt: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}", f"Jami: {format_money(s['total_amount'])}", f"To'lov: {s['payment_type']}", "Tovarlar:"]
-    for it in items:
-        lines.append(f"- {it['name']} {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
-    bot.send_message(m.chat.id, "\n".join(lines), reply_markup=main_keyboard()); clear_state(uid)
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stock_export_choose_format")
 def stock_export_choose_format(m):
@@ -748,7 +808,10 @@ def stock_export_choose_format(m):
     if txt == "excel":
         bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
     else:
-        bot.send_document(m.chat.id, export_stock_pdf(), caption="Ombor holati (PDF)", reply_markup=main_keyboard())
+        # send JPEG version of ombor holati
+        img_buf = export_stock_image()
+        img_buf.seek(0)
+        bot.send_photo(m.chat.id, img_buf, caption="Ombor holati (rasm)", reply_markup=main_keyboard())
     clear_state(uid)
 
 def export_stock_excel():
@@ -767,48 +830,9 @@ def export_stock_excel():
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Ombor")
-        writer.close()   # 👈 bu satrni qo‘shing
+        writer.close()
     buf.seek(0)
     return buf
-
-def export_stock_pdf():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    buf = io.BytesIO()
-    p = canvas.Canvas(buf, pagesize=A4)
-    x = 20*mm
-    y = A4[1] - 20*mm
-    p.setFont("Helvetica-Bold", 12)
-    p.drawString(x, y, "Ombor holati")
-    y -= 10*mm
-    p.setFont("Helvetica", 9)
-
-    if not rows:
-        p.drawString(x, y, "Omborda hech qanday mahsulot yo'q.")
-    else:
-        for r in rows:
-            line = f"{r['id']}. {r['name']} — {r['qty']} dona — opt narx: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}"
-            p.drawString(x, y, line)
-            y -= 6*mm
-            if y < 30*mm:
-                p.showPage()
-                y = A4[1] - 20*mm
-
-    p.showPage()
-    p.save()
-    buf.seek(0)
-    return buf
-    
-def stats_pdf_bytes(period):
-    buf = io.BytesIO(); p = canvas.Canvas(buf, pagesize=A4)
-    p.setFont("Helvetica-Bold", 14); p.drawString(30*mm, A4[1]-30*mm, f"Hisobot: {period}")
-    p.setFont("Helvetica", 10); p.drawString(30*mm, A4[1]-40*mm, f"Sana: {now_str()}"); p.drawString(30*mm, A4[1]-50*mm, "Eslatma: to'liq statistikani yaratish uchun serverda ko'proq ma'lumot yig'ilishi kerak.")
-    p.showPage(); p.save(); buf.seek(0); return buf
 
 @bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
 def cmd_debts(m):
