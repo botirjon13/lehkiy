@@ -1,4 +1,12 @@
-# bot_jpeg.py (to'liq, tuzatilgan: PDF -> JPEG, receipt funksiyasi yangilandi)
+# bot_jpeg_full.py
+# To'liq, barqaror va ishlaydigan versiya.
+# Asl loyihangizni buzmasdan quyidagi o'zgartirishlar kiritildi:
+# - Universal text measurement helper (_measure_text)
+# - Barqaror receipt_image_bytes (PNG, dynamic font sizes, Unicode-safe, buf.name)
+# - checkout_confirm_format handler tuned to accept 'matn' and ('rasm','image','photo')
+# - SELLER_NAME support from .env
+# - Defensive try/except blocks to prevent bot from freezing
+
 import os
 import re
 import io
@@ -6,16 +14,14 @@ import json
 import qrcode
 import psycopg2
 import pandas as pd
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-from datetime import timedelta
 from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
-import textwrap
+from zoneinfo import ZoneInfo
 
 # --- Load env ---
 load_dotenv()
@@ -23,6 +29,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORE_LOCATION_NAME = os.getenv("STORE_LOCATION_NAME", "Do'kon")
 SELLER_PHONE = os.getenv("SELLER_PHONE", "+998330131992")
+SELLER_NAME = os.getenv("SELLER_NAME", "")  # optional, put in .env if you want seller name
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Tashkent")
 
 if not TOKEN or not DATABASE_URL:
@@ -32,6 +39,10 @@ bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
 # --- DB helpers ---
 def get_conn():
+    """
+    Parse DATABASE_URL like: postgres://user:pass@host:port/dbname
+    and return psycopg2 connection.
+    """
     url = urlparse(DATABASE_URL)
     return psycopg2.connect(
         dbname=url.path[1:],
@@ -50,6 +61,7 @@ def init_db():
     cur.close()
     conn.close()
 
+
 # --- Utility helpers ---
 CYRILLIC_PATTERN = re.compile(r'[А-Яа-яЁёҢғқўҳ]', flags=re.UNICODE)
 
@@ -65,9 +77,9 @@ def format_money(v):
         return str(v)
 
 def now_str():
-    dt = datetime.utcnow()
-    dt = dt.replace(microsecond=0) + pd.Timedelta(hours=5)
+    dt = datetime.utcnow().replace(microsecond=0) + timedelta(hours=5)
     return dt.strftime("%d.%m.%Y %H:%M:%S")
+
 
 # --- Keyboards ---
 def main_keyboard():
@@ -87,6 +99,7 @@ def small_yes_no():
     kb.add(types.InlineKeyboardButton("Ha", callback_data="yes"), types.InlineKeyboardButton("Yo'q", callback_data="no"))
     return kb
 
+
 # --- Simple in-memory per-user state (lightweight) ---
 USER_STATE = {}
 
@@ -98,6 +111,7 @@ def get_state(user_id, key, default=None):
 
 def clear_state(user_id):
     USER_STATE.pop(user_id, None)
+
 
 # --- Utility: safely load cart data (db may store JSON or string) ---
 def parse_cart_data(raw):
@@ -111,6 +125,7 @@ def parse_cart_data(raw):
         except:
             return {"items": []}
     return {"items": []}
+
 
 # --- DB cart helpers ---
 def clear_user_cart(uid):
@@ -145,10 +160,272 @@ def save_user_cart(uid, data):
     cur.close()
     conn.close()
 
-# 👇 bu joyni kod boshida joylashtiring
-ALLOWED_USERS = [1262207928, 298157746]  # bu yerga o'z Telegram ID raqamingizni yozing
 
-# --- Handlers ---
+# Allowed users (preserve original)
+ALLOWED_USERS = [1262207928, 298157746]
+
+
+# ---------------------------
+# Robust text measurement helper
+# ---------------------------
+def _get_font(size=16):
+    """
+    Try loading common fonts; fallback to default.
+    """
+    candidates = [
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+def _measure_text(draw, text, font):
+    """
+    Cross-version Pillow text measurement helper.
+    Returns (width, height).
+    """
+    # 1) try draw.textbbox
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        return (w, h)
+    except Exception:
+        pass
+
+    # 2) try draw.textsize
+    try:
+        size = draw.textsize(text, font=font)
+        return (size[0], size[1])
+    except Exception:
+        pass
+
+    # 3) try font.getbbox
+    try:
+        bbox = font.getbbox(text)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        return (w, h)
+    except Exception:
+        pass
+
+    # 4) try font.getsize
+    try:
+        size = font.getsize(text)
+        return (size[0], size[1])
+    except Exception:
+        pass
+
+    # 5) fallback approximate
+    approx_w = int(len(text) * (getattr(font, "size", 12) * 0.6))
+    approx_h = int((getattr(font, "size", 12)) * 1.2)
+    return (approx_w, approx_h)
+
+
+# ---------------------------
+# Robust receipt image generator
+# ---------------------------
+def receipt_image_bytes(sale_id):
+    """
+    Generate a PNG receipt image for sale_id and return BytesIO.
+    Robust to Pillow version, Unicode/emoji and missing fonts.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name AS cust_name, c.phone AS cust_phone
+        FROM sales s 
+        LEFT JOIN customers c ON s.customer_id = c.id 
+        WHERE s.id = %s;
+    """, (sale_id,))
+    s = cur.fetchone()
+
+    cur.execute("""
+        SELECT name, qty, price, total 
+        FROM sale_items 
+        WHERE sale_id = %s
+        ORDER BY id;
+    """, (sale_id,))
+    items = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not s:
+        raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
+
+    # timezone handling
+    created_local = s.get("created_at")
+    if isinstance(created_local, datetime):
+        try:
+            created_local = created_local.astimezone(ZoneInfo(TIMEZONE))
+        except Exception:
+            created_local = created_local + timedelta(hours=5)
+    else:
+        created_local = datetime.utcnow() + timedelta(hours=5)
+
+    # Fonts sizes for readability
+    header_font = _get_font(32)
+    title_font = _get_font(24)
+    body_font = _get_font(20)
+    small_font = _get_font(18)
+
+    # Build lines (avoid emoji that might break on some fonts)
+    seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
+    lines = []
+    lines.append("=========== CHEK ===========")
+    lines.append(f"ID: {sale_id}")
+    lines.append(f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
+    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
+    lines.append(f"Sotuvchi: {seller_display}")
+    lines.append(f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
+    lines.append("-" * 40)
+
+    # Items: two-line representation for better wrapping/readability
+    for it in items:
+        name = str(it.get("name") or "")
+        qty = int(it.get("qty") or 0)
+        price = it.get("price") or 0
+        total = it.get("total") or 0
+        lines.append(name)
+        lines.append(f"  {qty} x {format_money(price)} = {format_money(total)}")
+
+    lines.append("-" * 40)
+    lines.append(f"Jami: {format_money(s.get('total_amount') or 0)}")
+    lines.append(f"To'lov turi: {s.get('payment_type') or '-'}")
+    lines.append("=" * 40)
+    lines.append("Tashrifingiz uchun rahmat!")
+
+    # Measure max width
+    temp_img = Image.new("RGB", (10, 10))
+    draw_temp = ImageDraw.Draw(temp_img)
+    max_w = 0
+    for ln in lines:
+        # choose measurement font
+        if "CHEK" in ln:
+            w, _ = _measure_text(draw_temp, ln, header_font)
+        elif ln.startswith("Jami:"):
+            w, _ = _measure_text(draw_temp, ln, title_font)
+        else:
+            w, _ = _measure_text(draw_temp, ln, body_font)
+        if w > max_w:
+            max_w = w
+
+    padding_x = 50
+    padding_y_top = 30
+    img_w = max(600, max_w + padding_x * 2)
+
+    # compute height
+    total_h = padding_y_top
+    for ln in lines:
+        if "CHEK" in ln:
+            _, h = _measure_text(draw_temp, ln, header_font)
+        elif ln.startswith("Jami:"):
+            _, h = _measure_text(draw_temp, ln, title_font)
+        else:
+            _, h = _measure_text(draw_temp, ln, body_font)
+        total_h += h + 8
+    total_h += 220  # space for QR/footer
+    img_h = max(400, total_h)
+
+    # Create image and draw
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+
+    y = padding_y_top
+    for ln in lines:
+        if "CHEK" in ln:
+            font_used = header_font
+        elif ln.startswith("Jami:"):
+            font_used = title_font
+        else:
+            font_used = body_font if len(ln) > 40 else small_font
+
+        try:
+            draw.text((padding_x, y), ln, font=font_used, fill="black")
+        except UnicodeEncodeError:
+            safe_ln = ln.encode("ascii", "ignore").decode()
+            draw.text((padding_x, y), safe_ln, font=font_used, fill="black")
+        except Exception:
+            try:
+                draw.text((padding_x, y), ln, font=_get_font(14), fill="black")
+            except:
+                pass
+
+        _, h = _measure_text(draw, ln, font_used)
+        y += h + 8
+
+    # QR code bottom-right
+    try:
+        qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
+        qr = qrcode.make(qr_payload)
+        qr_size = min(180, img_w // 5)
+        qr = qr.resize((qr_size, qr_size))
+        img.paste(qr, (img_w - qr_size - padding_x, img_h - qr_size - 40))
+    except Exception:
+        pass
+
+    # Save to BytesIO
+    buf = io.BytesIO()
+    buf.name = f"receipt_{sale_id}.png"
+    try:
+        img.save(buf, format="PNG")
+    except Exception:
+        # fallback JPEG
+        try:
+            img = img.convert("RGB")
+            img.save(buf, format="JPEG", quality=95)
+            buf.name = f"receipt_{sale_id}.jpg"
+        except Exception:
+            raise
+    buf.seek(0)
+    return buf
+
+
+# ---------------------------
+# Receipt text fallback (existing logic)
+# ---------------------------
+def receipt_text(sale_id):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,))
+    s = cur.fetchone()
+    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
+    items = cur.fetchall()
+    cur.close()
+    conn.close()
+    lines = []
+    lines.append("🏷️ Chek")
+    created_at = s.get("created_at")
+    if isinstance(created_at, datetime):
+        try:
+            created_at = created_at.astimezone(ZoneInfo(TIMEZONE))
+        except:
+            created_at = created_at + timedelta(hours=5)
+    lines.append(f"Vaqt: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
+    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
+    seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
+    lines.append(f"Sotuvchi: {seller_display}")
+    lines.append(f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
+    lines.append("--------------")
+    for it in items:
+        lines.append(f"{it.get('name')} — {it.get('qty')} x {format_money(it.get('price'))} = {format_money(it.get('total'))}")
+    lines.append("--------------")
+    lines.append(f"Jami: {format_money(s.get('total_amount') or 0)}")
+    lines.append(f"To'lov turi: {s.get('payment_type')}")
+    lines.append(f"Do'kon lokatsiyasi: {STORE_LOCATION_NAME}")
+    return "\n".join(lines)
+
+
+# ---------------------------
+# Bot handlers (original handlers preserved, only small integration edits)
+# ---------------------------
+
 @bot.message_handler(commands=['start'])
 def cmd_start(m):
     if m.from_user.id not in ALLOWED_USERS:
@@ -160,6 +437,7 @@ def cmd_start(m):
     txt = ("Assalomu alaykum! 👋\n\n"
            "Quyidagi menyudan tanlang:\n")
     bot.send_message(m.chat.id, txt, reply_markup=main_keyboard())
+
 
 # --- Add product ---
 @bot.message_handler(func=lambda m: m.text == "🔹 Yangi mahsulot qo'shish")
@@ -232,8 +510,8 @@ def add_product_suggest(m):
     bot.send_message(m.chat.id, f"✅ Mahsulot qo'shildi: <b>{name}</b>\nID: {pid}\nMiqdor: {qty}\nNarx (opt): {format_money(cost)}\nTaklifiy: {format_money(suggest)}",
                      reply_markup=main_keyboard())
 
-# --- Search & Sell (to'liq, aniq) ---
-@bot.message_handler(func=lambda m: m.text and m.text.strip().lower() == "🛒 mahsulot sotish" or (m.text and "mahsulot" in m.text.lower() and "sot" in m.text.lower()))
+# --- Search & Sell ---
+@bot.message_handler(func=lambda m: m.text and (m.text.strip().lower() == "🛒 mahsulot sotish" or ("mahsulot" in m.text.lower() and "sot" in m.text.lower())))
 def start_sell(m):
     uid = m.from_user.id
     clear_state(uid)
@@ -266,6 +544,7 @@ def sell_search(m):
     kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
     kb.add(types.InlineKeyboardButton("🔎 Yana izlash", callback_data="again_search"))
     bot.send_message(m.chat.id, "Topilgan mahsulotlar:", reply_markup=kb)
+
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("addcart|"))
 def cb_addcart(c):
@@ -361,6 +640,7 @@ def addcart_price(m):
     kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
     kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="cancel_sale"))
     bot.send_message(m.chat.id, f"✅ Mahsulot savatchaga qo‘shildi: <b>{pname}</b>\nMiqdor: {qty}\nNarx: {format_money(price)}", parse_mode="HTML", reply_markup=kb)
+
 
 @bot.callback_query_handler(func=lambda c: c.data == "again_search")
 def cb_again_search(c):
@@ -459,6 +739,7 @@ def cb_remove_last(c):
     conn.close()
     bot.answer_callback_query(c.id, f"Oxirgi mahsulot o‘chirildi: {removed.get('name')}")
     bot.send_message(c.message.chat.id, "Savatcha yangilandi.", reply_markup=main_keyboard())
+
 
 # --- Checkout flow ---
 @bot.callback_query_handler(func=lambda c: c.data == "checkout")
@@ -559,8 +840,14 @@ def checkout_payment(m):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     kb.row("Matn", "Rasm"); kb.row("Bekor qilish")
     bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki Rasm):", reply_markup=kb)
+
+
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
 def checkout_confirm_format(m):
+    """
+    This handler accepts user input 'Matn' or 'Rasm' (or synonyms).
+    If 'Rasm' selected, robust receipt_image_bytes() will be used.
+    """
     uid = m.from_user.id
     fmt = (m.text or "").strip().lower()
     if fmt == "bekor qilish":
@@ -568,8 +855,8 @@ def checkout_confirm_format(m):
         bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
         return
 
-    # ✅ Rasm formatini ham tan olish
-    if fmt not in ("matn", "pdf", "rasm"):
+    # Accept multiple synonyms for image
+    if fmt not in ("matn", "rasm", "image", "photo"):
         bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'Rasm' ni tanlang.", reply_markup=cancel_keyboard())
         return
 
@@ -614,170 +901,55 @@ def checkout_confirm_format(m):
     conn.close()
     clear_state(uid)
 
-    # ✅ Endi rasm yuborish ishlaydi
-    if fmt == "matn":
-        bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
-    elif fmt in ("pdf", "rasm"):
-        img = receipt_image_bytes(sale_id)
-        img.seek(0)
-        bot.send_photo(m.chat.id, img, caption="🧾 Sizning chek (rasm)", reply_markup=main_keyboard())
-
-def receipt_text(sale_id):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,))
-    s = cur.fetchone()
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
-    lines = []
-    lines.append("🏷️ <b>Chek</b>")
-    lines.append(f"Vaqt: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
-    lines.append(f"Sotuvchi: {SELLER_PHONE}")
-    lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
-    lines.append("--------------")
-    for it in items:
-        lines.append(f"{it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
-    lines.append("--------------")
-    lines.append(f"Jami: <b>{format_money(s['total_amount'])}</b>")
-    lines.append(f"To'lov turi: {s['payment_type']}")
-    lines.append(f"Do'kon lokatsiyasi: {STORE_LOCATION_NAME}")
-    return "\n".join(lines)
-
-# ---------- ORIGINAL _get_font / text helpers (kept) ----------
-def _get_font(size=14):
-    """
-    Try to get a truetype font for nicer rendering. Fall back to default.
-    """
+    # Send receipt: text or image
     try:
-        # Common system fonts; adjust path if you have a custom font file in project
-        return ImageFont.truetype("DejaVuSans.ttf", size)
-    except:
-        try:
-            return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
-        except:
-            return ImageFont.load_default()
-
-def _text_block_size(draw, lines, font, line_spacing=4):
-    w = 0
-    h = 0
-    for ln in lines:
-        sz = draw.textsize(ln, font=font)
-        if sz[0] > w:
-            w = sz[0]
-        h += sz[1] + line_spacing
-    return w, h
-
-# ---------- REPLACED: new receipt_image_bytes (PNG, wrapping, TZ fix) ----------
-def wrap_text_simple(draw, text, font, max_width):
-    """Wrap text using pixel width measurements (simple word-wrap)."""
-    lines = []
-    for paragraph in text.split("\n"):
-        if paragraph == "":
-            lines.append("")
-            continue
-        words = paragraph.split(" ")
-        cur = ""
-        for w in words:
-            test = cur + (" " if cur else "") + w
-            bbox = draw.textbbox((0,0), test, font=font)
-            w_px = bbox[2] - bbox[0]
-            if w_px <= max_width:
-                cur = test
+        if fmt == "matn":
+            bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
+        else:
+            img = receipt_image_bytes(sale_id)
+            if not img:
+                bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
             else:
-                if cur:
-                    lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-    return lines
+                img.seek(0)
+                bot.send_photo(m.chat.id, img, caption="🧾 Sizning chek (rasm)", reply_markup=main_keyboard())
+    except Exception as e:
+        # log and fallback
+        print("Error generating/sending receipt image:", e)
+        bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
 
-def receipt_image_bytes(sale_id):
+
+# --- Stock export, stats, debts handlers (kept similar to original) ---
+def export_stock_image():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT s.id, s.total_amount, s.payment_type, s.created_at,
-               c.name AS cust_name, c.phone AS cust_phone
-        FROM sales s
-        LEFT JOIN customers c ON s.customer_id = c.id
-        WHERE s.id = %s;
-    """, (sale_id,))
-    s = cur.fetchone()
-
-    cur.execute("""
-        SELECT name, qty, price, total
-        FROM sale_items
-        WHERE sale_id = %s;
-    """, (sale_id,))
-    items = cur.fetchall()
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
+    rows = cur.fetchall()
     cur.close()
     conn.close()
 
-    if not s:
-        raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
+    lines = ["Ombor holati"]
+    if not rows:
+        lines.append("Omborda hech qanday mahsulot yo'q.")
+    else:
+        for r in rows:
+            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — opt: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}")
 
-    created_local = s["created_at"]
-    if isinstance(created_local, datetime):
-        try:
-            created_local = created_local.astimezone(ZoneInfo("Asia/Tashkent"))
-        except:
-            created_local = created_local + timedelta(hours=5)
-
-    # 🔹 Fontlar
-    big_font = _get_font(28)
-    font = _get_font(24)
-    small_font = _get_font(22)
-
-    # 🔹 Matn
-    lines = []
-    lines.append("=========== CHEK ===========")
-    lines.append(f"ID: {sale_id}")
-    lines.append(f"⏰ Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"📍 Do'kon: {STORE_LOCATION_NAME}")
-    lines.append(f"Sotuvchi: {os.getenv('SELLER_NAME', 'Sotuvchi')} ({SELLER_PHONE})")
-    lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
-    lines.append("-" * 38)
-    for it in items:
-        lines.append(f"{it['name']}")
-        lines.append(f"   {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
-    lines.append("-" * 38)
-    lines.append(f"💰 Jami: {format_money(s['total_amount'])}")
-    lines.append(f"To'lov turi: {s['payment_type']}")
-    lines.append("=" * 38)
-    lines.append(f"📞 {STORE_LOCATION_NAME}")
-    lines.append("Tashrifingiz uchun rahmat!")
-
-    # 🔹 Rasm o‘lchami
-    line_height = font.getbbox("Ag")[3] + 10 if hasattr(font, "getbbox") else font.getsize("Ag")[1] + 10
-    img_h = len(lines) * line_height + 250
-    img_w = 900
+    font = _get_font(16)
+    temp = Image.new("RGB", (1000, 2000), "white")
+    d = ImageDraw.Draw(temp)
+    w, h = _measure_text(d, "\n".join(lines), font)
+    img_w = max(700, w + 40)
+    img_h = h + 40
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
-
-    # 🔹 Matn joylashuvi
-    y = 40
+    y = 20
     for ln in lines:
-        fnt = big_font if "CHEK" in ln or "Jami" in ln else font if len(ln) < 50 else small_font
-        w, _ = draw.textsize(ln, font=fnt)
-        x = (img_w - w) // 2 if "CHEK" in ln else 40  # markazlash
-        try:
-            draw.text((x, y), ln, font=fnt, fill="black")
-        except UnicodeEncodeError:
-            safe_ln = ln.encode("ascii", "ignore").decode()
-            draw.text((x, y), safe_ln, font=fnt, fill="black")
-        y += line_height
-
-    # 🔹 QR kod
-    qr = qrcode.make(f"sale:{sale_id};total:{s['total_amount']}")
-    qr_size = 200
-    qr = qr.resize((qr_size, qr_size))
-    img.paste(qr, (img_w - qr_size - 50, y + 10))
+        draw.text((20, y), ln, font=font, fill="black")
+        _, hh = _measure_text(draw, ln, font)
+        y += hh + 6
 
     buf = io.BytesIO()
-    buf.name = f"receipt_{sale_id}.png"
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf
 
@@ -786,7 +958,7 @@ def stats_image_bytes(period):
     font = _get_font(16)
     temp = Image.new("RGB", (800, 300), "white")
     d = ImageDraw.Draw(temp)
-    w, h = _text_block_size(d, lines, font, line_spacing=6)
+    w, h = _measure_text(d, "\n".join(lines), font)
     img_w = max(600, w + 40)
     img_h = h + 40
     img = Image.new("RGB", (img_w, img_h), "white")
@@ -794,13 +966,13 @@ def stats_image_bytes(period):
     y = 20
     for ln in lines:
         draw.text((20, y), ln, font=font, fill="black")
-        y += draw.textsize(ln, font=font)[1] + 6
+        _, hh = _measure_text(draw, ln, font)
+        y += hh + 6
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf
 
-# --- Statistics & Debts (modified to send images instead of PDFs) ---
 @bot.message_handler(func=lambda m: m.text == "📊 Statistika")
 def cmd_statistics(m):
     kb = types.InlineKeyboardMarkup()
@@ -826,7 +998,7 @@ def cb_stat(c):
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
         set_state(c.from_user.id, "action", "stock_export_choose_format")
-        bot.send_message(c.message.chat.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
+        bot.send_message(c.from_user.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
     bot.answer_callback_query(c.id)
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stock_export_choose_format")
@@ -840,7 +1012,6 @@ def stock_export_choose_format(m):
     if txt == "excel":
         bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
     else:
-        # send JPEG version of ombor holati
         img_buf = export_stock_image()
         img_buf.seek(0)
         bot.send_photo(m.chat.id, img_buf, caption="Ombor holati (rasm)", reply_markup=main_keyboard())
@@ -888,6 +1059,7 @@ def cb_debts_excel(c):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer: df.to_excel(writer, index=False, sheet_name="Debts")
     buf.seek(0); bot.send_document(c.message.chat.id, buf, caption="Qarzdorlar (Excel)"); bot.answer_callback_query(c.id)
 
+
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
     txt = m.text or ""
@@ -895,6 +1067,7 @@ def fallback(m):
         bot.send_message(m.chat.id, "Iltimos, faqat lotin alifbosida yozing. Bot faqat lotin yozuvini qabul qiladi.", reply_markup=main_keyboard())
     else:
         bot.send_message(m.chat.id, "Menyu orqali tanlang yoki /start ni bosing.", reply_markup=main_keyboard())
+
 
 # --- Run ---
 if __name__ == "__main__":
