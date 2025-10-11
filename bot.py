@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+from datetime import timedelta
 from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
@@ -692,7 +693,6 @@ def wrap_text_simple(draw, text, font, max_width):
         if cur:
             lines.append(cur)
     return lines
-from datetime import timedelta
 
 def receipt_image_bytes(sale_id):
     conn = get_conn()
@@ -726,7 +726,7 @@ def receipt_image_bytes(sale_id):
             created_local = created_local + timedelta(hours=5)
 
     lines = []
-    lines.append(f"🧾 CHEK #{sale_id}")
+    lines.append(f"CHEK #{sale_id}")  # 🧾 olib tashlandi
     lines.append(f"Vaqt: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
     lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
     lines.append(f"Sotuvchi: {SELLER_PHONE}")
@@ -743,18 +743,18 @@ def receipt_image_bytes(sale_id):
     temp_img = Image.new("RGB", (900, 2000), "white")
     draw = ImageDraw.Draw(temp_img)
 
-    wrapped = []
-    for ln in lines:
-        wrapped.append(ln)
-
     line_height = font.getbbox("Ag")[3] + 8 if hasattr(font, "getbbox") else font.getsize("Ag")[1] + 8
-    img_h = len(wrapped) * line_height + 300
+    img_h = len(lines) * line_height + 300
     img = Image.new("RGB", (900, img_h), "white")
     draw = ImageDraw.Draw(img)
 
     y = 40
-    for ln in wrapped:
-        draw.text((40, y), ln, font=font, fill="black")
+    for ln in lines:
+        try:
+            draw.text((40, y), ln, font=font, fill="black")
+        except UnicodeEncodeError:
+            safe_ln = ln.encode("ascii", "ignore").decode()
+            draw.text((40, y), safe_ln, font=font, fill="black")
         y += line_height
 
     qr_data = f"store:{STORE_LOCATION_NAME};sale:{sale_id};total:{s['total_amount']}"
@@ -768,7 +768,7 @@ def receipt_image_bytes(sale_id):
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
-
+    
 def export_stock_image():
     """
     Create an image representing the stock list (JPEG) and return BytesIO.
