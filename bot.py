@@ -760,7 +760,7 @@ def export_stock_excel():
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Ombor")
     buf.seek(0); return buf
-    def export_stock_excel():
+def export_stock_excel():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
