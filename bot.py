@@ -554,8 +554,8 @@ def checkout_payment(m):
     set_state(uid, "checkout_payment_type", txt)
     set_state(uid, "action", "checkout_confirm_format")
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    kb.row("Matn", "PDF"); kb.row("Bekor qilish")
-    bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki PDF):", reply_markup=kb)
+    kb.row("Matn", "Rasm"); kb.row("Bekor qilish")
+    bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki Rasm):", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
 def checkout_confirm_format(m):
@@ -563,8 +563,8 @@ def checkout_confirm_format(m):
     fmt = (m.text or "").strip().lower()
     if fmt == "bekor qilish":
         clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if fmt not in ("matn", "pdf"):
-        bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'PDF' ni tanlang.", reply_markup=cancel_keyboard()); return
+    if fmt not in ("matn", "rasm"):
+        bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'Rasm' ni tanlang.", reply_markup=cancel_keyboard()); return
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -792,7 +792,7 @@ def cb_stat(c):
         bot.send_photo(c.message.chat.id, img_buf, caption=f"{period} hisobot (rasm)")
     elif cmd == "stock_export":
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        kb.row("Excel", "PDF"); kb.row("Bekor qilish")
+        kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
         set_state(c.from_user.id, "action", "stock_export_choose_format")
         bot.send_message(c.message.chat.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
     bot.answer_callback_query(c.id)
@@ -803,8 +803,8 @@ def stock_export_choose_format(m):
     txt = (m.text or "").strip().lower()
     if txt == "bekor qilish":
         clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if txt not in ("excel", "pdf"):
-        bot.send_message(m.chat.id, "Iltimos Excel yoki PDF ni tanlang.", reply_markup=cancel_keyboard()); return
+    if txt not in ("excel", "rasm"):
+        bot.send_message(m.chat.id, "Iltimos Excel yoki Rasm ni tanlang.", reply_markup=cancel_keyboard()); return
     if txt == "excel":
         bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
     else:
