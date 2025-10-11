@@ -294,7 +294,6 @@ def addcart_fill(m):
     set_state(uid, "addcart_qty", qty)
     set_state(uid, "action", "addcart_price")
     bot.send_message(m.chat.id, f"Sotiladigan narxni kiriting (so'm). Taklifiy: {format_money(p['suggest_price'])}", reply_markup=cancel_keyboard())
-
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "addcart_price")
 def addcart_price(m):
     uid = m.from_user.id
@@ -309,21 +308,24 @@ def addcart_price(m):
     price = int(txt)
     pid = get_state(uid, "addcart_pid")
     qty = get_state(uid, "addcart_qty")
-    # add to user_carts table
+
+    # Mahsulot ma’lumotlarini olish
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    # fetch existing cart
+    cur.execute("SELECT name FROM products WHERE id=%s;", (pid,))
+    pname = cur.fetchone()['name']
+
+    # Savatchaga qo‘shish
     cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
     row = cur.fetchone()
     if row:
         data = row['data']
     else:
         data = {"items": []}
-    # add item
-    cur.execute("SELECT name FROM products WHERE id=%s;", (pid,))
-    pname = cur.fetchone()['name']
+
     item = {"product_id": pid, "name": pname, "qty": qty, "price": price}
     data['items'].append(item)
+
     if row:
         cur.execute("UPDATE user_carts SET data=%s, updated_at=now() WHERE user_id=%s;", (json.dumps(data), uid))
     else:
@@ -331,10 +333,21 @@ def addcart_price(m):
     conn.commit()
     cur.close()
     conn.close()
-    clear_state(uid)
-    # show cart summary
-    bot.send_message(m.chat.id, f"✅ Mahsulot savatchaga qo‘shildi: {pname}\nMiqdor: {qty}\nNarx: {format_money(price)}", reply_markup=main_keyboard())
 
+    clear_state(uid)
+
+    # 🔹 Inline tugmalarni yaratish
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Yana mahsulot qo‘shish", callback_data="again_search"))
+    kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
+    kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="clear_cart"))
+
+    bot.send_message(
+        m.chat.id,
+        f"✅ Mahsulot savatchaga qo‘shildi:\n<b>{pname}</b>\nMiqdor: {qty}\nNarx: {format_money(price)}",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
 @bot.callback_query_handler(func=lambda c: c.data == "view_cart")
 def cb_view_cart(c):
     uid = c.from_user.id
