@@ -344,7 +344,7 @@ def cmd_debts(m):
 
 
 # --- Bot ishga tushirish ---
-if name == "__main__":
+if __name__ == "__main__":
     init_db()
     print("✅ Bot ishga tushdi!")
     bot.infinity_polling()
