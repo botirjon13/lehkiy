@@ -692,17 +692,25 @@ def wrap_text_simple(draw, text, font, max_width):
         if cur:
             lines.append(cur)
     return lines
+from datetime import timedelta
 
 def receipt_image_bytes(sale_id):
-    """
-    Improved: create a PNG receipt image with wrapped text and clean layout.
-    Replaces previous JPEG implementation. Uses ZoneInfo to show Asia/Tashkent time.
-    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,))
+    cur.execute("""
+        SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
+               c.name AS cust_name, c.phone AS cust_phone
+        FROM sales s 
+        LEFT JOIN customers c ON s.customer_id = c.id 
+        WHERE s.id = %s;
+    """, (sale_id,))
     s = cur.fetchone()
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
+
+    cur.execute("""
+        SELECT name, qty, price, total 
+        FROM sale_items 
+        WHERE sale_id = %s;
+    """, (sale_id,))
     items = cur.fetchall()
     cur.close()
     conn.close()
@@ -710,64 +718,53 @@ def receipt_image_bytes(sale_id):
     if not s:
         raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
 
-    # timezone handling: convert created_at to Asia/Tashkent if possible
-    created_local = s['created_at']
+    created_local = s["created_at"]
     if isinstance(created_local, datetime):
         try:
             created_local = created_local.astimezone(ZoneInfo("Asia/Tashkent"))
-        except Exception:
-            # fallback: add 5 hours
-            created_local = created_local + pd.Timedelta(hours=5)
+        except:
+            created_local = created_local + timedelta(hours=5)
 
-    # build lines
     lines = []
-    lines.append("🧾 CHECK")
+    lines.append(f"🧾 CHEK #{sale_id}")
     lines.append(f"Vaqt: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
     lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
     lines.append(f"Sotuvchi: {SELLER_PHONE}")
     lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
-    lines.append("-" * 30)
+    lines.append("-" * 40)
     for it in items:
         lines.append(f"{it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
-    lines.append("-" * 30)
+    lines.append("-" * 40)
     lines.append(f"Jami: {format_money(s['total_amount'])}")
     lines.append(f"To'lov turi: {s['payment_type']}")
-    lines.append(f"Lokatsiya kodi: {STORE_LOCATION_NAME}")
+    lines.append(f"Joylashuv: {STORE_LOCATION_NAME}")
 
-    # fonts
-    font = _get_font(16)
-    small_font = _get_font(14)
+    font = _get_font(18)
+    temp_img = Image.new("RGB", (900, 2000), "white")
+    draw = ImageDraw.Draw(temp_img)
 
-    # measure & wrap
-    temp_img = Image.new("RGB", (1,1))
-    draw_temp = ImageDraw.Draw(temp_img)
-    max_text_width = 760  # image width minus paddings
     wrapped = []
     for ln in lines:
-        wrapped.extend(wrap_text_simple(draw_temp, ln, font, max_text_width))
+        wrapped.append(ln)
 
-    # compute image size
-    line_height = font.getbbox("Ag")[3] + 6
-    img_w = 820
-    img_h = max(400, len(wrapped) * line_height + 180)
-
-    img = Image.new("RGB", (img_w, img_h), "white")
+    line_height = font.getbbox("Ag")[3] + 8 if hasattr(font, "getbbox") else font.getsize("Ag")[1] + 8
+    img_h = len(wrapped) * line_height + 300
+    img = Image.new("RGB", (900, img_h), "white")
     draw = ImageDraw.Draw(img)
 
-    y = 20
-    padding_left = 20
+    y = 40
     for ln in wrapped:
-        use_font = font if len(ln) < 60 else small_font
-        draw.text((padding_left, y), ln, font=use_font, fill="black")
+        draw.text((40, y), ln, font=font, fill="black")
         y += line_height
 
-    # QR code bottom-right
-    qr = qrcode.make(f"Store:{STORE_LOCATION_NAME};sale:{sale_id}")
-    qr_size = min(160, img_w // 5)
+    qr_data = f"store:{STORE_LOCATION_NAME};sale:{sale_id};total:{s['total_amount']}"
+    qr = qrcode.make(qr_data)
+    qr_size = min(200, 200)
     qr = qr.resize((qr_size, qr_size))
-    img.paste(qr, (img_w - qr_size - 20, y + 10))
+    img.paste(qr, (900 - qr_size - 40, y + 10))
 
     buf = io.BytesIO()
+    buf.name = f"receipt_{sale_id}.png"
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
