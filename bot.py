@@ -159,7 +159,7 @@ def add_price(m):
     bot.send_message(m.chat.id, f"✅ Mahsulot qo‘shildi:\n<b>{name}</b>\nMiqdor: {qty}\nNarx: {format_money(price)}", reply_markup=main_kb())
     
     @bot.callback_query_handler(func=lambda c: c.data == "view_cart")
-def cb_view_cart(c):
+    def cb_view_cart(c):
     uid = c.from_user.id
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
