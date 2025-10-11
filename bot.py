@@ -698,17 +698,17 @@ def receipt_image_bytes(sale_id):
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
-        SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
+        SELECT s.id, s.total_amount, s.payment_type, s.created_at,
                c.name AS cust_name, c.phone AS cust_phone
-        FROM sales s 
-        LEFT JOIN customers c ON s.customer_id = c.id 
+        FROM sales s
+        LEFT JOIN customers c ON s.customer_id = c.id
         WHERE s.id = %s;
     """, (sale_id,))
     s = cur.fetchone()
 
     cur.execute("""
-        SELECT name, qty, price, total 
-        FROM sale_items 
+        SELECT name, qty, price, total
+        FROM sale_items
         WHERE sale_id = %s;
     """, (sale_id,))
     items = cur.fetchall()
@@ -725,83 +725,59 @@ def receipt_image_bytes(sale_id):
         except:
             created_local = created_local + timedelta(hours=5)
 
+    # 🔹 Fontlar
+    big_font = _get_font(28)
+    font = _get_font(24)
+    small_font = _get_font(22)
+
+    # 🔹 Matn
     lines = []
-    lines.append(f"CHEK #{sale_id}")  # 🧾 olib tashlandi
-    lines.append(f"Vaqt: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
-    lines.append(f"Sotuvchi: {SELLER_PHONE}")
+    lines.append("=========== CHEK ===========")
+    lines.append(f"ID: {sale_id}")
+    lines.append(f"⏰ Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
+    lines.append(f"📍 Do'kon: {STORE_LOCATION_NAME}")
+    lines.append(f"Sotuvchi: {os.getenv('SELLER_NAME', 'Sotuvchi')} ({SELLER_PHONE})")
     lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
-    lines.append("-" * 40)
+    lines.append("-" * 38)
     for it in items:
-        lines.append(f"{it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
-    lines.append("-" * 40)
-    lines.append(f"Jami: {format_money(s['total_amount'])}")
+        lines.append(f"{it['name']}")
+        lines.append(f"   {it['qty']} x {format_money(it['price'])} = {format_money(it['total'])}")
+    lines.append("-" * 38)
+    lines.append(f"💰 Jami: {format_money(s['total_amount'])}")
     lines.append(f"To'lov turi: {s['payment_type']}")
-    lines.append(f"Joylashuv: {STORE_LOCATION_NAME}")
+    lines.append("=" * 38)
+    lines.append(f"📞 {STORE_LOCATION_NAME}")
+    lines.append("Tashrifingiz uchun rahmat!")
 
-    font = _get_font(18)
-    temp_img = Image.new("RGB", (900, 2000), "white")
-    draw = ImageDraw.Draw(temp_img)
-
-    line_height = font.getbbox("Ag")[3] + 8 if hasattr(font, "getbbox") else font.getsize("Ag")[1] + 8
-    img_h = len(lines) * line_height + 300
-    img = Image.new("RGB", (900, img_h), "white")
+    # 🔹 Rasm o‘lchami
+    line_height = font.getbbox("Ag")[3] + 10 if hasattr(font, "getbbox") else font.getsize("Ag")[1] + 10
+    img_h = len(lines) * line_height + 250
+    img_w = 900
+    img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
+    # 🔹 Matn joylashuvi
     y = 40
     for ln in lines:
+        fnt = big_font if "CHEK" in ln or "Jami" in ln else font if len(ln) < 50 else small_font
+        w, _ = draw.textsize(ln, font=fnt)
+        x = (img_w - w) // 2 if "CHEK" in ln else 40  # markazlash
         try:
-            draw.text((40, y), ln, font=font, fill="black")
+            draw.text((x, y), ln, font=fnt, fill="black")
         except UnicodeEncodeError:
             safe_ln = ln.encode("ascii", "ignore").decode()
-            draw.text((40, y), safe_ln, font=font, fill="black")
+            draw.text((x, y), safe_ln, font=fnt, fill="black")
         y += line_height
 
-    qr_data = f"store:{STORE_LOCATION_NAME};sale:{sale_id};total:{s['total_amount']}"
-    qr = qrcode.make(qr_data)
-    qr_size = min(200, 200)
+    # 🔹 QR kod
+    qr = qrcode.make(f"sale:{sale_id};total:{s['total_amount']}")
+    qr_size = 200
     qr = qr.resize((qr_size, qr_size))
-    img.paste(qr, (900 - qr_size - 40, y + 10))
+    img.paste(qr, (img_w - qr_size - 50, y + 10))
 
     buf = io.BytesIO()
     buf.name = f"receipt_{sale_id}.png"
     img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-    
-def export_stock_image():
-    """
-    Create an image representing the stock list (JPEG) and return BytesIO.
-    """
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    lines = ["Ombor holati"]
-    if not rows:
-        lines.append("Omborda hech qanday mahsulot yo'q.")
-    else:
-        for r in rows:
-            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — opt: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}")
-
-    font = _get_font(16)
-    temp = Image.new("RGB", (1000, 2000), "white")
-    d = ImageDraw.Draw(temp)
-    w, h = _text_block_size(d, lines, font, line_spacing=6)
-    img_w = max(700, w + 40)
-    img_h = h + 40
-    img = Image.new("RGB", (img_w, img_h), "white")
-    draw = ImageDraw.Draw(img)
-    y = 20
-    for ln in lines:
-        draw.text((20, y), ln, font=font, fill="black")
-        y += draw.textsize(ln, font=font)[1] + 6
-
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf
 
