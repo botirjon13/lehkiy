@@ -1,175 +1,103 @@
-import os
-import asyncio
-from decimal import Decimal
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
-from aiogram.filters.callback_data import CallbackData
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-import asyncpg
+execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    df = pd.DataFrame(rows)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Ombor")
+    buf.seek(0)
+    return buf
 
-TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
-ADMINS = [1262207928]  # Telegram user_id lar
+def export_stock_pdf():
+    # create simple pdf list
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    buf = io.BytesIO()
+    p = canvas.Canvas(buf, pagesize=A4)
+    x = 20*mm
+    y = A4[1] - 20*mm
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(x, y, "Ombor holati")
+    y -= 10*mm
+    p.setFont("Helvetica", 9)
+    for r in rows:
+        line = f"{r['id']}. {r['name']} — {r['qty']} dona — opt narx: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}"
+        p.drawString(x, y, line)
+        y -= 6*mm
+        if y < 30*mm:
+            p.showPage()
+            y = A4[1] - 20*mm
+    p.showPage()
+    p.save()
+    buf.seek(0)
+    return buf
 
-bot = Bot(TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+def stats_pdf_bytes(period):
+    # simple sample stats - implement real aggregation as needed
+    buf = io.BytesIO()
+    p = canvas.Canvas(buf, pagesize=A4)
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(30*mm, A4[1]-30*mm, f"Hisobot: {period}")
+    p.setFont("Helvetica", 10)
+    p.drawString(30*mm, A4[1]-40*mm, f"Sana: {now_str()}")
+    p.drawString(30*mm, A4[1]-50*mm, "Eslatma: to'liq statistikani yaratish uchun serverda ko'proq ma'lumot yig'ilishi kerak.")
+    p.showPage()
+    p.save()
+    buf.seek(0)
+    return buf
 
-db_pool: asyncpg.pool.Pool | None = None
-
-# --- CallbackData ---
-class BuyCallback(CallbackData, prefix="buy"):
-    product_id: int
-
-# --- Helpers ---
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMINS
-
-# --- DB init ---
-async def init_db_pool():
-    global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
-                name TEXT UNIQUE,
-                quantity INT,
-                price NUMERIC(12,2)
-            );
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS sales (
-                id SERIAL PRIMARY KEY,
-                product_id INT REFERENCES products(id),
-                quantity INT,
-                price NUMERIC(12,2),
-                total NUMERIC(14,2),
-                sale_date TIMESTAMP,
-                seller_id BIGINT
-            );
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS carts (
-                user_id BIGINT,
-                product_id INT,
-                quantity INT,
-                PRIMARY KEY (user_id, product_id)
-            );
-        """)
-
-# --- Sotish handler ---
-@dp.message(Text("🛒 Sotish"))
-async def start_sell(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ Sizda ruxsat yo'q.")
-        return
-    await message.answer("Mahsulot nomini yozing (qidirish):")
-
-# --- Qidiruv ---
-@dp.message()
-async def search_product(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    q = message.text.lower()
-    rows = await db_pool.fetch(
-        "SELECT id, name, quantity, price FROM products WHERE LOWER(name) LIKE $1 LIMIT 10",
-        f"%{q}%"
-    )
+# --- Debts list ---
+@bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
+def cmd_debts(m):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT d.id, d.amount, d.created_at, c.name, c.phone FROM debts d JOIN customers c ON d.customer_id=c.id ORDER BY d.created_at DESC;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
     if not rows:
-        await message.answer("Mahsulot topilmadi.")
+        bot.send_message(m.chat.id, "Hozircha qarzdorlar yo'q.", reply_markup=main_keyboard())
         return
-
+    # offer excel export or show list
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Ro'yxatni Excel ko'rinishida yuborish", callback_data="debts_excel"))
+    text_lines = ["📋 Qarzdorlar ro'yxati:"]
     for r in rows:
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(
-                text=f"🛒 Savatchaga qo‘shish ({r['price']})",
-                callback_data=BuyCallback(product_id=r['id']).pack()
-            )]
-        ])
-        await message.answer(f"{r['name']} — {r['quantity']} ta, narxi: {r['price']}", reply_markup=kb)
+        text_lines.append(f"- {r['name']} {r['phone']} — {format_money(r['amount'])} ({r['created_at'].strftime('%d.%m.%Y')})")
+    bot.send_message(m.chat.id, "\n".join(text_lines), reply_markup=kb)
 
-# --- Callback: savatchaga qo‘shish ---
-@dp.callback_query(BuyCallback.filter())
-async def add_to_cart(call: types.CallbackQuery, callback_data: BuyCallback):
-    user_id = call.from_user.id
-    product = await db_pool.fetchrow("SELECT id, name, quantity, price FROM products WHERE id=$1", callback_data.product_id)
-    if not product:
-        await call.answer("Mahsulot topilmadi", show_alert=True)
-        return
-    if product['quantity'] <= 0:
-        await call.answer("Omborda mahsulot yo‘q", show_alert=True)
-        return
+@bot.callback_query_handler(func=lambda c: c.data == "debts_excel")
+def cb_debts_excel(c):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT d.id, c.name, c.phone, d.amount, d.created_at FROM debts d JOIN customers c ON d.customer_id=c.id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    df = pd.DataFrame(rows)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Debts")
+    buf.seek(0)
+    bot.send_document(c.message.chat.id, buf, caption="Qarzdorlar (Excel)")
+    bot.answer_callback_query(c.id)
 
-    # Savatchaga qo‘shish yoki quantity oshirish
-    await db_pool.execute("""
-        INSERT INTO carts(user_id, product_id, quantity)
-        VALUES($1, $2, 1)
-        ON CONFLICT(user_id, product_id) DO UPDATE
-        SET quantity = carts.quantity + 1
-    """, user_id, product['id'])
+# --- fallback text handler to catch non-matching input and to warn about Cyrillic ---
+@bot.message_handler(func=lambda m: True)
+def fallback(m):
+    # if message contains Cyrillic, warn
+    if check_latin(m.text):
+        bot.send_message(m.chat.id, "Iltimos, faqat lotin alifbosida yozing. Bot faqat lotin yozuvini qabul qiladi.", reply_markup=main_keyboard())
+    else:
+        bot.send_message(m.chat.id, "Menyu orqali tanlang yoki /start ni bosing.", reply_markup=main_keyboard())
 
-    await call.answer(f"{product['name']} savatchaga qo‘shildi ✅")
-
-# --- Savatchani ko‘rish ---
-@dp.message(Text("🛒 Savatcha"))
-async def view_cart(message: types.Message):
-    user_id = message.from_user.id
-    rows = await db_pool.fetch("""
-        SELECT p.name, p.price, c.quantity
-        FROM carts c
-        JOIN products p ON p.id = c.product_id
-        WHERE c.user_id=$1
-    """, user_id)
-
-    if not rows:
-        await message.answer("Savatcha bo‘sh.")
-        return
-
-    total = sum(r['price'] * r['quantity'] for r in rows)
-    text = "🛒 Sizning savatchangiz:\n"
-    for r in rows:
-        text += f"{r['name']} x {r['quantity']} — {r['price'] * r['quantity']}\n"
-    text += f"\nJami: {total}"
-    await message.answer(text)
-
-# --- Savatchani sotish ---
-@dp.message(Text("💳 Xarid qilish"))
-async def checkout_cart(message: types.Message):
-    user_id = message.from_user.id
-    rows = await db_pool.fetch("""
-        SELECT p.id, p.name, p.price, c.quantity, p.quantity AS stock
-        FROM carts c
-        JOIN products p ON p.id = c.product_id
-        WHERE c.user_id=$1
-    """, user_id)
-
-    if not rows:
-        await message.answer("Savatcha bo‘sh.")
-        return
-
-    for r in rows:
-        if r['quantity'] > r['stock']:
-            await message.answer(f"{r['name']} omborda yetarli emas!")
-            return
-
-    for r in rows:
-        total_price = r['price'] * r['quantity']
-        await db_pool.execute("""
-            INSERT INTO sales(product_id, quantity, price, total, sale_date, seller_id)
-            VALUES($1,$2,$3,$4,$5,$6)
-        """, r['id'], r['quantity'], r['price'], total_price, datetime.utcnow(), user_id)
-        await db_pool.execute("UPDATE products SET quantity=quantity-$1 WHERE id=$2", r['quantity'], r['id'])
-
-    # Savatchani bo‘shatish
-    await db_pool.execute("DELETE FROM carts WHERE user_id=$1", user_id)
-    await message.answer("✅ Xarid muvaffaqiyatli amalga oshirildi!")
-
-# --- Run ---
-async def main():
-    await init_db_pool()
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# --- Run init ---
+if name == "__main__":
+    init_db()
+    print("Bot ishga tushmoqda...")
+    bot.infinity_polling()
