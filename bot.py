@@ -157,7 +157,175 @@ def add_price(m):
 
     clear_state(uid)
     bot.send_message(m.chat.id, f"✅ Mahsulot qo‘shildi:\n<b>{name}</b>\nMiqdor: {qty}\nNarx: {format_money(price)}", reply_markup=main_kb())
-    
+    # --- Search & Sell (To‘liq yangilangan) ---
+@bot.message_handler(func=lambda m: m.text == "🛒 Mahsulot sotish")
+def start_sell(m):
+    uid = m.from_user.id
+    clear_state(uid)
+    clear_user_cart(uid)
+    set_state(uid, "action", "sell_search")
+    bot.send_message(m.chat.id, "Qaysi mahsulotni izlamoqchisiz? (nom yoki uning bir qismi, lotincha):", reply_markup=cancel_keyboard())
+
+def clear_user_cart(uid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM user_carts WHERE user_id=%s;", (uid,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "sell_search")
+def sell_search(m):
+    uid = m.from_user.id
+    txt = m.text.strip()
+    if txt.lower() == "bekor qilish":
+        clear_user_cart(uid)
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Savdo bekor qilindi.", reply_markup=main_keyboard())
+        return
+
+    if check_latin(txt):
+        bot.send_message(m.chat.id, "Iltimos faqat lotincha kiriting.", reply_markup=cancel_keyboard())
+        return
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE name ILIKE %s ORDER BY id;", (f"%{txt}%",))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        bot.send_message(m.chat.id, "Mahsulot topilmadi. Yana urinib ko‘ring yoki 'Bekor qilish' ni tanlang.", reply_markup=cancel_keyboard())
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    for r in rows:
+        btn_text = f"{r['name']} ({r['qty']} dona) – {format_money(r['suggest_price'])}"
+        kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"addcart|{r['id']}"))
+    kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
+    kb.add(types.InlineKeyboardButton("🔎 Yana izlash", callback_data="again_search"))
+    bot.send_message(m.chat.id, "Topilgan mahsulotlar:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("addcart|"))
+def cb_addcart(c):
+    uid = c.from_user.id
+    _, pid = c.data.split("|")
+    pid = int(pid)
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE id=%s;", (pid,))
+    p = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not p:
+        bot.answer_callback_query(c.id, "Mahsulot topilmadi.")
+        return
+
+    set_state(uid, "addcart_pid", pid)
+    set_state(uid, "action", "addcart_qty")
+    bot.send_message(c.message.chat.id, f"<b>{p['name']}</b> tanlandi.\nMiqdorini kiriting (son):", parse_mode="HTML", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "addcart_qty")
+def addcart_qty(m):
+    uid = m.from_user.id
+    txt = m.text.strip()
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos son kiriting (masalan: 5).", reply_markup=cancel_keyboard())
+        return
+
+    set_state(uid, "addcart_qty", int(txt))
+    set_state(uid, "action", "addcart_price")
+    bot.send_message(m.chat.id, "Sotish narxini kiriting (so‘m):", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "addcart_price")
+def addcart_price(m):
+    uid = m.from_user.id
+    txt = m.text.strip().replace(" ", "").replace(",", "")
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 12000).", reply_markup=cancel_keyboard())
+        return
+
+    price = int(txt)
+    pid = get_state(uid, "addcart_pid")
+    qty = get_state(uid, "addcart_qty")
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT name FROM products WHERE id=%s;", (pid,))
+    pname = cur.fetchone()['name']
+
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    if row:
+        data = row['data']
+    else:
+        data = {"items": []}
+
+    item = {"product_id": pid, "name": pname, "qty": qty, "price": price}
+    data['items'].append(item)
+
+    if row:
+        cur.execute("UPDATE user_carts SET data=%s WHERE user_id=%s;", (json.dumps(data), uid))
+    else:
+        cur.execute("INSERT INTO user_carts (user_id, data) VALUES (%s, %s);", (uid, json.dumps(data)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    clear_state(uid)
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Yana mahsulot qo‘shish", callback_data="again_search"))
+    kb.add(types.InlineKeyboardButton("🧾 Savatchaga o‘tish", callback_data="view_cart"))
+    kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="clear_cart"))
+
+    bot.send_message(m.chat.id, f"✅ {pname} savatchaga qo‘shildi!", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data == "again_search")
+def cb_again_search(c):
+    set_state(c.from_user.id, "action", "sell_search")
+    bot.edit_message_text("Yana mahsulot qidiring (lotincha nom):", chat_id=c.message.chat.id, message_id=c.message.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "clear_cart")
+def cb_clear_cart(c):
+    uid = c.from_user.id
+    clear_user_cart(uid)
+    clear_state(uid)
+    bot.edit_message_text("❌ Savdo bekor qilindi.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+    bot.send_message(c.message.chat.id, "Asosiy menyu:", reply_markup=main_keyboard())
+
+@bot.callback_query_handler(func=lambda c: c.data == "view_cart")
+def cb_view_cart(c):
+    uid = c.from_user.id
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or not row['data']['items']:
+        bot.answer_callback_query(c.id, "Savatcha bo‘sh")
+        bot.send_message(c.message.chat.id, "Savatcha bo‘sh. Yana mahsulot qo‘shing.", reply_markup=main_keyboard())
+        return
+
+    items = row['data']['items']
+    total = sum(it['qty'] * it['price'] for it in items)
+    text = "🧾 <b>Savatcha</b>\n\n"
+    for it in items:
+        text += f"• {it['name']} — {it['qty']} x {format_money(it['price'])}\n"
+    text += f"\n<b>Jami:</b> {format_money(total)}"
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("✅ Sotishni yakunlash", callback_data="checkout"))
+    kb.add(types.InlineKeyboardButton("➕ Yana mahsulot qo‘shish", callback_data="again_search"))
+    kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="clear_cart"))
+
+    bot.edit_message_text(text, chat_id=c.message.chat.id, message_id=c.message.message_id, parse_mode="HTML", reply_markup=kb)
+
     @bot.callback_query_handler(func=lambda c: c.data == "view_cart")
     def cb_view_cart(c):
         uid = c.from_user.id
