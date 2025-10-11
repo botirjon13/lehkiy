@@ -308,6 +308,42 @@ def addcart_price(m):
     price = int(txt)
     pid = get_state(uid, "addcart_pid")
     qty = get_state(uid, "addcart_qty")
+        # show cart summary with new inline buttons
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("🛍️ Yana mahsulot qo‘shish", callback_data="again_search"),
+        types.InlineKeyboardButton("🧾 Savatchaga o‘tish", callback_data="view_cart"),
+    )
+    kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="cancel_sale"))
+    bot.send_message(
+        m.chat.id,
+        "Mahsulot savatchaga qo‘shildi ✅\nEndi nima qilamiz?",
+        reply_markup=kb,
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data == "again_search")
+def cb_again_search(c):
+    """Yana mahsulot qo‘shish — foydalanuvchini mahsulot izlash bosqichiga qaytaradi."""
+    uid = c.from_user.id
+    set_state(uid, "action", "sell_search")
+    bot.edit_message_text(
+        "Qaysi mahsulotni izlamoqchisiz? (nom yoki uning bir qismi, lotincha):",
+        chat_id=c.message.chat.id,
+        message_id=c.message.message_id,
+    )
+
+@bot.callback_query_handler(func=lambda c: c.data == "cancel_sale")
+def cb_cancel_sale(c):
+    """Savdoni to‘liq bekor qiladi va savatchani tozalaydi."""
+    uid = c.from_user.id
+    clear_user_cart(uid)
+    clear_state(uid)
+    bot.edit_message_text(
+        "❌ Savdo bekor qilindi. Asosiy menyuga qaytildi.",
+        chat_id=c.message.chat.id,
+        message_id=c.message.message_id,
+    )
+    bot.send_message(c.message.chat.id, "Asosiy menyu:", reply_markup=main_keyboard())
 
     # Mahsulot ma’lumotlarini olish
     conn = get_conn()
