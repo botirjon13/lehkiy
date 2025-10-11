@@ -145,13 +145,20 @@ def save_user_cart(uid, data):
     cur.close()
     conn.close()
 
+# 👇 bu joyni kod boshida joylashtiring
+ALLOWED_USERS = [1262207928]  # bu yerga o'z Telegram ID raqamingizni yozing
+
 # --- Handlers ---
 @bot.message_handler(commands=['start'])
 def cmd_start(m):
+    if m.from_user.id not in ALLOWED_USERS:
+        bot.send_message(m.chat.id, "❌ Sizga bu botdan foydalanish ruxsat berilmagan.")
+        return
+
     uid = m.from_user.id
     clear_state(uid)
     txt = ("Assalomu alaykum! 👋\n\n"
-           "Quyidagi menyudan tanlang:")
+           "Quyidagi menyudan tanlang:\n")
     bot.send_message(m.chat.id, txt, reply_markup=main_keyboard())
 
 # --- Add product ---
