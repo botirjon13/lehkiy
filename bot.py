@@ -1,4 +1,4 @@
-# bot_jpeg.py (to'liq, tuzatilgan: PDF -> JPEG)
+# bot_jpeg.py (to'liq, tuzatilgan: PDF -> JPEG, receipt funksiyasi yangilandi)
 import os
 import re
 import io
@@ -7,12 +7,14 @@ import qrcode
 import psycopg2
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
+import textwrap
 
 # --- Load env ---
 load_dotenv()
@@ -643,7 +645,7 @@ def receipt_text(sale_id):
     lines.append(f"Do'kon lokatsiyasi: {STORE_LOCATION_NAME}")
     return "\n".join(lines)
 
-# ---------- NEW: create JPEG receipts/images instead of PDF ----------
+# ---------- ORIGINAL _get_font / text helpers (kept) ----------
 def _get_font(size=14):
     """
     Try to get a truetype font for nicer rendering. Fall back to default.
@@ -667,9 +669,34 @@ def _text_block_size(draw, lines, font, line_spacing=4):
         h += sz[1] + line_spacing
     return w, h
 
+# ---------- REPLACED: new receipt_image_bytes (PNG, wrapping, TZ fix) ----------
+def wrap_text_simple(draw, text, font, max_width):
+    """Wrap text using pixel width measurements (simple word-wrap)."""
+    lines = []
+    for paragraph in text.split("\n"):
+        if paragraph == "":
+            lines.append("")
+            continue
+        words = paragraph.split(" ")
+        cur = ""
+        for w in words:
+            test = cur + (" " if cur else "") + w
+            bbox = draw.textbbox((0,0), test, font=font)
+            w_px = bbox[2] - bbox[0]
+            if w_px <= max_width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+    return lines
+
 def receipt_image_bytes(sale_id):
     """
-    Create a JPEG image of the receipt and return BytesIO.
+    Improved: create a PNG receipt image with wrapped text and clean layout.
+    Replaces previous JPEG implementation. Uses ZoneInfo to show Asia/Tashkent time.
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -680,10 +707,22 @@ def receipt_image_bytes(sale_id):
     cur.close()
     conn.close()
 
-    # build text lines
+    if not s:
+        raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
+
+    # timezone handling: convert created_at to Asia/Tashkent if possible
+    created_local = s['created_at']
+    if isinstance(created_local, datetime):
+        try:
+            created_local = created_local.astimezone(ZoneInfo("Asia/Tashkent"))
+        except Exception:
+            # fallback: add 5 hours
+            created_local = created_local + pd.Timedelta(hours=5)
+
+    # build lines
     lines = []
     lines.append("🧾 CHECK")
-    lines.append(f"Vaqt: {s['created_at'].strftime('%d.%m.%Y %H:%M:%S')}")
+    lines.append(f"Vaqt: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
     lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
     lines.append(f"Sotuvchi: {SELLER_PHONE}")
     lines.append(f"Mijoz: {s['cust_name'] or '-'} {s['cust_phone'] or ''}")
@@ -695,35 +734,41 @@ def receipt_image_bytes(sale_id):
     lines.append(f"To'lov turi: {s['payment_type']}")
     lines.append(f"Lokatsiya kodi: {STORE_LOCATION_NAME}")
 
-    # font and layout
+    # fonts
     font = _get_font(16)
     small_font = _get_font(14)
 
-    # prepare temporary draw to compute size
-    temp_img = Image.new("RGB", (800, 2000), "white")
-    draw = ImageDraw.Draw(temp_img)
-    text_w, text_h = _text_block_size(draw, lines, font, line_spacing=6)
-    img_w = max(600, text_w + 40)
-    img_h = text_h + 200
+    # measure & wrap
+    temp_img = Image.new("RGB", (1,1))
+    draw_temp = ImageDraw.Draw(temp_img)
+    max_text_width = 760  # image width minus paddings
+    wrapped = []
+    for ln in lines:
+        wrapped.extend(wrap_text_simple(draw_temp, ln, font, max_text_width))
+
+    # compute image size
+    line_height = font.getbbox("Ag")[3] + 6
+    img_w = 820
+    img_h = max(400, len(wrapped) * line_height + 180)
 
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
     y = 20
-    for ln in lines:
-        # choose font size for amount line
-        draw.text((20, y), ln, font=font if len(ln) < 60 else small_font, fill="black")
-        y += draw.textsize(ln, font=font if len(ln) < 60 else small_font)[1] + 6
+    padding_left = 20
+    for ln in wrapped:
+        use_font = font if len(ln) < 60 else small_font
+        draw.text((padding_left, y), ln, font=use_font, fill="black")
+        y += line_height
 
-    # add QR at bottom-right
-    qr = qrcode.make(f"Store:{STORE_LOCATION_NAME}")
-    qr_size = min(180, img_w // 4)
+    # QR code bottom-right
+    qr = qrcode.make(f"Store:{STORE_LOCATION_NAME};sale:{sale_id}")
+    qr_size = min(160, img_w // 5)
     qr = qr.resize((qr_size, qr_size))
     img.paste(qr, (img_w - qr_size - 20, y + 10))
 
-    # save to bytes
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
+    img.save(buf, format="PNG")
     buf.seek(0)
     return buf
 
