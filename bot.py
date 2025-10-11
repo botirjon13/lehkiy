@@ -160,18 +160,18 @@ def add_price(m):
     
     @bot.callback_query_handler(func=lambda c: c.data == "view_cart")
     def cb_view_cart(c):
-    uid = c.from_user.id
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+        uid = c.from_user.id
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
 
-    if not row or not row['data'] or not row['data'].get('items'):
-        bot.answer_callback_query(c.id, "Savatcha bo‘sh")
-        bot.send_message(c.message.chat.id, "Savatcha bo‘sh. Yana mahsulot qidirish uchun 'Mahsulot sotish' ni tanlang.", reply_markup=main_keyboard())
-        return
+        if not row or not row['data'] or not row['data'].get('items'):
+           bot.answer_callback_query(c.id, "Savatcha bo‘sh")
+           bot.send_message(c.message.chat.id, "Savatcha bo‘sh. Yana mahsulot qidirish uchun 'Mahsulot sotish' ni tanlang.", reply_markup=main_keyboard())
+           return
 
     data = row['data']
     items = data['items']
