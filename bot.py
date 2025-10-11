@@ -752,15 +752,6 @@ def stock_export_choose_format(m):
     clear_state(uid)
 
 def export_stock_excel():
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
-    rows = cur.fetchall(); cur.close(); conn.close()
-    df = pd.DataFrame(rows)
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Ombor")
-    buf.seek(0); return buf
-def export_stock_excel():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
@@ -780,21 +771,6 @@ def export_stock_excel():
     buf.seek(0)
     return buf
 
-def export_stock_pdf():
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
-    rows = cur.fetchall(); cur.close(); conn.close()
-    buf = io.BytesIO()
-    p = canvas.Canvas(buf, pagesize=A4)
-    x = 20*mm; y = A4[1] - 20*mm
-    p.setFont("Helvetica-Bold", 12); p.drawString(x, y, "Ombor holati"); y -= 10*mm
-    p.setFont("Helvetica", 9)
-    for r in rows:
-        line = f"{r['id']}. {r['name']} — {r['qty']} dona — opt narx: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}"
-        p.drawString(x, y, line); y -= 6*mm
-        if y < 30*mm:
-            p.showPage(); y = A4[1] - 20*mm
-    p.showPage(); p.save(); buf.seek(0); return buf
 def export_stock_pdf():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
