@@ -556,22 +556,30 @@ def checkout_payment(m):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     kb.row("Matn", "Rasm"); kb.row("Bekor qilish")
     bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki Rasm):", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
 def checkout_confirm_format(m):
     uid = m.from_user.id
     fmt = (m.text or "").strip().lower()
     if fmt == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if fmt not in ("matn", "rasm"):
-        bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'Rasm' ni tanlang.", reply_markup=cancel_keyboard()); return
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        return
+
+    # ✅ Rasm formatini ham tan olish
+    if fmt not in ("matn", "pdf", "rasm"):
+        bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'Rasm' ni tanlang.", reply_markup=cancel_keyboard())
+        return
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
     row = cur.fetchone()
     if not row or not row.get('data') or not parse_cart_data(row.get('data')).get('items'):
-        bot.send_message(m.chat.id, "Savatcha bo'sh - sotish imkoni yo'q.", reply_markup=main_keyboard()); clear_state(uid); cur.close(); conn.close(); return
+        bot.send_message(m.chat.id, "Savatcha bo'sh - sotish imkoni yo'q.", reply_markup=main_keyboard())
+        clear_state(uid)
+        cur.close()
+        conn.close()
+        return
 
     data = parse_cart_data(row.get('data'))
     items = data.get('items', [])
@@ -579,13 +587,19 @@ def checkout_confirm_format(m):
     cust_id = get_state(uid, "checkout_customer_id")
     payment = get_state(uid, "checkout_payment_type")
 
-    cur.execute("INSERT INTO sales (customer_id, total_amount, payment_type, seller_phone) VALUES (%s, %s, %s, %s) RETURNING id, created_at;", (cust_id, total, payment, SELLER_PHONE))
+    cur.execute("""
+        INSERT INTO sales (customer_id, total_amount, payment_type, seller_phone)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, created_at;
+    """, (cust_id, total, payment, SELLER_PHONE))
     sale = cur.fetchone()
     sale_id = sale['id']
 
     for it in items:
-        cur.execute("INSERT INTO sale_items (sale_id, product_id, name, qty, price, total) VALUES (%s,%s,%s,%s,%s,%s);",
-                    (sale_id, it['product_id'], it['name'], it['qty'], it['price'], it['qty'] * it['price']))
+        cur.execute("""
+            INSERT INTO sale_items (sale_id, product_id, name, qty, price, total)
+            VALUES (%s,%s,%s,%s,%s,%s);
+        """, (sale_id, it['product_id'], it['name'], it['qty'], it['price'], it['qty'] * it['price']))
         cur.execute("UPDATE products SET qty = qty - %s WHERE id=%s;", (it['qty'], it['product_id']))
 
     if payment == "qarz":
@@ -597,13 +611,13 @@ def checkout_confirm_format(m):
     conn.close()
     clear_state(uid)
 
+    # ✅ Endi rasm yuborish ishlaydi
     if fmt == "matn":
         bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
-    else:
-        # Now we send a JPEG image of the receipt
-        img_buf = receipt_image_bytes(sale_id)
-        img_buf.seek(0)
-        bot.send_photo(m.chat.id, img_buf, caption="Sizning chek (rasm)", reply_markup=main_keyboard())
+    elif fmt in ("pdf", "rasm"):
+        img = receipt_image_bytes(sale_id)
+        img.seek(0)
+        bot.send_photo(m.chat.id, img, caption="🧾 Sizning chek (rasm)", reply_markup=main_keyboard())
 
 def receipt_text(sale_id):
     conn = get_conn()
@@ -803,7 +817,7 @@ def stock_export_choose_format(m):
     txt = (m.text or "").strip().lower()
     if txt == "bekor qilish":
         clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if txt not in ("excel", "rasm"):
+    if txt not in ("excel", "pdf", "rasm"):
         bot.send_message(m.chat.id, "Iltimos Excel yoki Rasm ni tanlang.", reply_markup=cancel_keyboard()); return
     if txt == "excel":
         bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
