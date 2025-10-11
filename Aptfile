@@ -3,3 +3,8 @@ libpango1.0-dev
 libjpeg-dev
 libgif-dev
 libfreetype6-dev
+libfreetype6
+libjpeg62-turbo
+libpng16-16
+fonts-dejavu-core
+fonts-freefont-ttf
