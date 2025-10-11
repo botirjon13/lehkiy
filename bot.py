@@ -146,7 +146,7 @@ def save_user_cart(uid, data):
     conn.close()
 
 # 👇 bu joyni kod boshida joylashtiring
-ALLOWED_USERS = [1262207928]  # bu yerga o'z Telegram ID raqamingizni yozing
+ALLOWED_USERS = [1262207928, 298157746]  # bu yerga o'z Telegram ID raqamingizni yozing
 
 # --- Handlers ---
 @bot.message_handler(commands=['start'])
