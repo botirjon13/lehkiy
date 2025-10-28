@@ -1047,35 +1047,55 @@ def export_stock_excel():
 # ---------------------------
 # NEW: Export all products as Excel (triggered by menu button "📊 Ombor (Excel)")
 # ---------------------------
+@bot.message_handler(func=lambda m: m.text == "📊 Ombor (Excel)")
+def export_products_excel_handler(m):
+    # faqat ruxsatli foydalanuvchilarga (xohlasangiz olib tashlang)
+    if m.from_user.id not in ALLOWED_USERS:
+        bot.send_message(m.chat.id, "❌ Sizga bu amaliyot ruxsat etilmagan.", reply_markup=main_keyboard())
+        return
 
-@bot.message_handler(func=lambda message: message.text == "📊 Ombor (Excel)")
-def export_products_excel_handler(message):
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-        cur = conn.cursor()
-        cur.execute("SELECT id, name, quantity, price, offer_price, created_at FROM products ORDER BY id;")
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # <-- Mana shu qatorni o'zgartirdim: jadvaldagi haqiqiy ustun nomlari bilan
+        cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
         if not rows:
-            bot.send_message(message.chat.id, "📦 Omborda hozircha mahsulot yo‘q.")
+            bot.send_message(m.chat.id, "📦 Omborda hech qanday mahsulot yo'q.", reply_markup=main_keyboard())
             return
 
-        df = pd.DataFrame(rows, columns=["№", "Mahsulot nomi", "Miqdor", "Narx", "Taklif narxi", "Sana"])
+        # Pandas DataFrame — RealDictCursor natijasi allaqachon dict list ko'rinishida bo'ladi
+        df = pd.DataFrame(rows)
+
+        # Excel uchun vaqtinchalik fayl yaratamiz (file-like bilan telebot ba'zi holatlarda yaxshiroq ishlaydi)
+        import tempfile, os
+        from datetime import datetime
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            file_path = tmp.name
-            df.to_excel(file_path, index=False, engine="openpyxl")
+            tmp_path = tmp.name
 
-        file_name = f"products_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
-        with open(file_path, "rb") as f:
-            bot.send_document(message.chat.id, f, caption=f"📊 Ombor ro‘yxati ({file_name})")
+        try:
+            # yozish
+            df.to_excel(tmp_path, index=False, engine="openpyxl")
 
-        os.remove(file_path)
+            # faylni ochib yuboramiz
+            file_name = f"products_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+            with open(tmp_path, "rb") as f:
+                bot.send_document(m.chat.id, f, caption=f"📊 Ombor ro'yxati ({file_name})", reply_markup=main_keyboard())
+
+        finally:
+            # vaqtinchalik faylni o'chirish
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
+        print("export_products_excel_handler error:", e)
+        bot.send_message(m.chat.id, f"❌ Xatolik: {e}", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
 def cmd_debts(m):
