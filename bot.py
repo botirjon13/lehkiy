@@ -240,11 +240,11 @@ def _measure_text(draw, text, font):
 # ---------------------------
 def receipt_image_bytes(sale_id):
     """
-    Takomillashtirilgan chek dizayni:
+    Katta shriftli chek dizayni:
+    - Shriftlar kattaroq (42 / 34 / 28 pt)
     - Matn markazda
-    - Shriftlar kattaroq (28–32 pt)
-    - Oq fon, ixcham kenglik
-    - QR kodi pastda o‘rtada
+    - QR kodi pastda
+    - Oq fon
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -280,14 +280,14 @@ def receipt_image_bytes(sale_id):
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
-    # Kattaroq shriftlar
-    title_font = _get_font(34)
-    body_font = _get_font(28)
-    small_font = _get_font(24)
+    # 📏 Katta shriftlar
+    title_font = _get_font(42)
+    body_font = _get_font(34)
+    small_font = _get_font(28)
 
     seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
 
-    # Matnlar
+    # 📄 Matnlar
     lines = [
         "🧾 CHEK",
         f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}",
@@ -310,7 +310,7 @@ def receipt_image_bytes(sale_id):
     lines.append("────────────────────────────")
     lines.append("Tashrifingiz uchun rahmat! ❤️")
 
-    # Matn hajmini hisoblash
+    # 📏 Hajmni hisoblash
     temp_img = Image.new("RGB", (10, 10))
     draw_temp = ImageDraw.Draw(temp_img)
     widths, heights = [], []
@@ -319,32 +319,31 @@ def receipt_image_bytes(sale_id):
         widths.append(w)
         heights.append(h)
 
-    # Kenglikni ixcham qilish
-    max_w = max(widths) + 60
-    total_h = sum(h + 12 for h in heights) + 230
-    img_w = min(max(420, max_w), 600)  # ortiqcha kenglikni kamaytirish
-    img_h = max(600, total_h)
+    max_w = max(widths) + 80
+    total_h = sum(h + 20 for h in heights) + 260  # satrlar oralig‘i kattaroq
+    img_w = min(max(480, max_w), 700)
+    img_h = max(700, total_h)
 
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
-    # Matnni o‘rtada chizish
-    y = 40
+    # 🧾 Matnni o‘rtada chizish
+    y = 50
     for ln in lines:
         font_used = title_font if "CHEK" in ln else body_font
         w, h = _measure_text(draw, ln, font_used)
         x = (img_w - w) // 2
         draw.text((x, y), ln, font=font_used, fill="black")
-        y += h + 12
+        y += h + 20
 
-    # QR kodi pastda markazda
+    # 🔲 QR kodi pastda markazda
     try:
         qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
         qr = qrcode.make(qr_payload)
-        qr_size = 180
+        qr_size = 200
         qr = qr.resize((qr_size, qr_size))
         qr_x = (img_w - qr_size) // 2
-        qr_y = img_h - qr_size - 30
+        qr_y = img_h - qr_size - 40
         img.paste(qr, (qr_x, qr_y))
     except Exception as e:
         print("QR xatosi:", e)
@@ -354,6 +353,7 @@ def receipt_image_bytes(sale_id):
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
 # matn sifatida boradi
 def receipt_text(sale_id):
     """
