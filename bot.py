@@ -177,17 +177,17 @@ ALLOWED_USERS = [1262207928, 298157746]
 # ---------------------------
 def _get_font(size=16):
     """
-    Try loading common fonts; fallback to default.
+    Foydalaniladigan shrift: LiberationSans-Bold (aniq va kattaroq chiqadi).
+    Agar u topilmasa — DejaVuSans fallback ishlaydi.
     """
     candidates = [
-        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",  # juda tiniq
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     ]
-    for p in candidates:
+    for path in candidates:
         try:
-            return ImageFont.truetype(p, size)
+            return ImageFont.truetype(path, size)
         except Exception:
             continue
     return ImageFont.load_default()
