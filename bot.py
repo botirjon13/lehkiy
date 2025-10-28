@@ -22,6 +22,11 @@ from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
 from zoneinfo import ZoneInfo
+import pandas as pd
+import tempfile
+import psycopg2
+import os
+from datetime import datetime
 
 # --- Load env ---
 load_dotenv()
@@ -1042,39 +1047,35 @@ def export_stock_excel():
 # ---------------------------
 # NEW: Export all products as Excel (triggered by menu button "📊 Ombor (Excel)")
 # ---------------------------
-@bot.message_handler(func=lambda m: m.text == "📊 Ombor (Excel)")
-def export_products_excel_handler(m):
-    # Optional: restrict to allowed users
-    if m.from_user.id not in ALLOWED_USERS:
-        bot.send_message(m.chat.id, "❌ Sizga bu amaliyot ruxsat etilmagan.", reply_markup=main_keyboard())
-        return
 
+@bot.message_handler(func=lambda message: message.text == "📊 Ombor (Excel)")
+def export_products_excel_handler(message):
     try:
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, quantity, price, offer_price, created_at FROM products ORDER BY id;")
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
         if not rows:
-            bot.send_message(m.chat.id, "📦 Omborda hech qanday mahsulot yo'q.", reply_markup=main_keyboard())
+            bot.send_message(message.chat.id, "📦 Omborda hozircha mahsulot yo‘q.")
             return
 
-        df = pd.DataFrame(rows)
-        buf = io.BytesIO()
-        # Write Excel using pandas/openpyxl
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Ombor")
-            writer.close()
-        buf.seek(0)
+        df = pd.DataFrame(rows, columns=["№", "Mahsulot nomi", "Miqdor", "Narx", "Taklif narxi", "Sana"])
 
-        filename = f"products_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
-        # telebot accepts file-like objects for send_document
-        bot.send_document(m.chat.id, buf, filename=filename, caption="📊 Ombor ro'yxati (Excel)", reply_markup=main_keyboard())
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            file_path = tmp.name
+            df.to_excel(file_path, index=False, engine="openpyxl")
+
+        file_name = f"products_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+        with open(file_path, "rb") as f:
+            bot.send_document(message.chat.id, f, caption=f"📊 Ombor ro‘yxati ({file_name})")
+
+        os.remove(file_path)
+
     except Exception as e:
-        print("export_products_excel_handler error:", e)
-        bot.send_message(m.chat.id, f"❌ Xatolik: {e}", reply_markup=main_keyboard())
+        bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
 
 @bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
 def cmd_debts(m):
