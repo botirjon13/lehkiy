@@ -377,9 +377,9 @@ def receipt_image_bytes(sale_id):
         lines.append("🏷️ Chek")
         created_at = s.get("created_at")
     if isinstance(created_at, datetime):
-    try:
+        try:
             created_at = created_at.astimezone(ZoneInfo(TIMEZONE))
-    except:
+        except:
             created_at = created_at + timedelta(hours=5)
         lines.append(f"📅 Sana: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
         lines.append(f"🏬 Do‘kon: {STORE_LOCATION_NAME}")
