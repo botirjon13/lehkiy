@@ -1101,25 +1101,68 @@ def export_products_excel_handler(m):
 
 @bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
 def cmd_debts(m):
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT d.id, d.amount, d.created_at, c.name, c.phone FROM debts d JOIN customers c ON d.customer_id=c.id ORDER BY d.created_at DESC;")
-    rows = cur.fetchall(); cur.close(); conn.close()
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT d.id, d.amount, d.created_at, c.name, c.phone
+        FROM debts d
+        JOIN customers c ON d.customer_id = c.id
+        ORDER BY d.created_at DESC;
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     if not rows:
-        bot.send_message(m.chat.id, "Hozircha qarzdorlar yo'q.", reply_markup=main_keyboard()); return
-    kb = types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("Ro'yxatni Excel ko'rinishida yuborish", callback_data="debts_excel"))
-    text_lines = ["📋 Qarzdorlar ro'yxati:"]
-    for r in rows:
-        text_lines.append(f"- {r['name']} {r['phone']} — {format_money(r['amount'])} ({r['created_at'].strftime('%d.%m.%Y')})")
-    bot.send_message(m.chat.id, "\n".join(text_lines), reply_markup=kb)
+        bot.send_message(m.chat.id, "✅ Hozircha qarzdorlar yo‘q.", reply_markup=main_keyboard())
+        return
+
+    # --- Matnli ro‘yxatni chiroyli chiqarish ---
+    text_lines = ["📋 <b>Qarzdorlar ro‘yxati:</b>\n"]
+    for i, r in enumerate(rows, start=1):
+        sana = r['created_at'].strftime("%d.%m.%Y") if r['created_at'] else "-"
+        text_lines.append(f"{i}. <b>{r['name']}</b> ({r['phone']})\n💰 {format_money(r['amount'])} — 📅 {sana}\n")
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("⬇️ Excel faylni yuklab olish", callback_data="debts_excel"))
+
+    bot.send_message(m.chat.id, "\n".join(text_lines), parse_mode="HTML", reply_markup=kb)
+
 
 @bot.callback_query_handler(func=lambda c: c.data == "debts_excel")
 def cb_debts_excel(c):
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT d.id, c.name, c.phone, d.amount, d.created_at FROM debts d JOIN customers c ON d.customer_id=c.id;")
-    rows = cur.fetchall(); cur.close(); conn.close()
-    df = pd.DataFrame(rows); buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer: df.to_excel(writer, index=False, sheet_name="Debts")
-    buf.seek(0); bot.send_document(c.message.chat.id, buf, caption="Qarzdorlar (Excel)"); bot.answer_callback_query(c.id)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT c.name AS Mijoz, c.phone AS Telefon, d.amount AS Qarz_summasi, d.created_at AS Sana
+        FROM debts d
+        JOIN customers c ON d.customer_id = c.id
+        ORDER BY d.created_at DESC;
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        bot.answer_callback_query(c.id, "Qarzdorlar topilmadi.")
+        return
+
+    df = pd.DataFrame(rows)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Qarzdorlar")
+    buf.seek(0)
+
+    file_name = f"qarzdorlar_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    bot.send_document(
+        c.message.chat.id,
+        buf,
+        visible_file_name=file_name,
+        caption="📊 Qarzdorlar ro‘yxati (Excel formatida)"
+    )
+
+    bot.answer_callback_query(c.id, "Excel fayl yuborildi ✅")
 
 
 @bot.message_handler(func=lambda m: True)
