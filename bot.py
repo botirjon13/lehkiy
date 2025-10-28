@@ -354,46 +354,46 @@ def receipt_image_bytes(sale_id):
     buf.seek(0)
     return buf
     def receipt_text(sale_id):
-    """
-    Chek matn ko‘rinishida yuboriladigan versiya.
-    (Agar rasm chiqmasa, matn sifatida yuboriladi.)
-    """
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
+    
+        # Chek matn ko‘rinishida yuboriladigan versiya.
+        # (Agar rasm chiqmasa, matn sifatida yuboriladi.)
+        
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
         SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
                c.name as cust_name, c.phone as cust_phone
         FROM sales s 
         LEFT JOIN customers c ON s.customer_id = c.id 
         WHERE s.id=%s;
-    """, (sale_id,))
-    s = cur.fetchone()
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
+        """, (sale_id,))
+        s = cur.fetchone()
+        cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
+        items = cur.fetchall()
+        cur.close()
+        conn.close()
 
-    lines = []
-    lines.append("🏷️ Chek")
-    created_at = s.get("created_at")
+        lines = []
+        lines.append("🏷️ Chek")
+        created_at = s.get("created_at")
     if isinstance(created_at, datetime):
-        try:
+    try:
             created_at = created_at.astimezone(ZoneInfo(TIMEZONE))
-        except:
+    except:
             created_at = created_at + timedelta(hours=5)
-    lines.append(f"📅 Sana: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
-    lines.append(f"🏬 Do‘kon: {STORE_LOCATION_NAME}")
-    seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
-    lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
-    lines.append(f"👤 Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
-    lines.append("────────────────────────────")
+        lines.append(f"📅 Sana: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
+        lines.append(f"🏬 Do‘kon: {STORE_LOCATION_NAME}")
+        seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
+        lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
+        lines.append(f"👤 Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
+        lines.append("────────────────────────────")
     for it in items:
         lines.append(f"{it.get('name')} — {it.get('qty')} x {format_money(it.get('price'))} = {format_money(it.get('total'))}")
-    lines.append("────────────────────────────")
-    lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
-    lines.append(f"💳 To‘lov turi: {s.get('payment_type')}")
-    lines.append("────────────────────────────")
-    lines.append("Tashrifingiz uchun rahmat! ❤️")
+        lines.append("────────────────────────────")
+        lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
+        lines.append(f"💳 To‘lov turi: {s.get('payment_type')}")
+        lines.append("────────────────────────────")
+        lines.append("Tashrifingiz uchun rahmat! ❤️")
     return "\n".join(lines)
 
 # ---------------------------
