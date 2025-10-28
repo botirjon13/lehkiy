@@ -240,13 +240,16 @@ def _measure_text(draw, text, font):
 # ---------------------------
 def receipt_image_bytes(sale_id):
     """
-    Generate a PNG receipt image for sale_id and return BytesIO.
-    Robust to Pillow version, Unicode/emoji and missing fonts.
+    Yangi minimalist chek dizayni:
+    - Matn markazda joylashgan
+    - QR kod pastda o‘rtada
+    - Fon oq rangda
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
-        SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name AS cust_name, c.phone AS cust_phone
+        SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
+               c.name AS cust_name, c.phone AS cust_phone
         FROM sales s 
         LEFT JOIN customers c ON s.customer_id = c.id 
         WHERE s.id = %s;
@@ -266,168 +269,90 @@ def receipt_image_bytes(sale_id):
     if not s:
         raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
 
-    # timezone handling
+    from_zone = ZoneInfo(TIMEZONE)
     created_local = s.get("created_at")
     if isinstance(created_local, datetime):
         try:
-            created_local = created_local.astimezone(ZoneInfo(TIMEZONE))
+            created_local = created_local.astimezone(from_zone)
         except Exception:
             created_local = created_local + timedelta(hours=5)
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
-    # Fonts sizes for readability
-    header_font = _get_font(32)
-    title_font = _get_font(24)
-    body_font = _get_font(20)
-    small_font = _get_font(18)
+    # Fontlar
+    title_font = _get_font(28)
+    body_font = _get_font(22)
+    small_font = _get_font(20)
 
-    # Build lines (avoid emoji that might break on some fonts)
     seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
-    lines = []
-    lines.append("=========== CHEK ===========")
-    lines.append(f"ID: {sale_id}")
-    lines.append(f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}")
-    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
-    lines.append(f"Sotuvchi: {seller_display}")
-    lines.append(f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
-    lines.append("-" * 40)
 
-    # Items: two-line representation for better wrapping/readability
+    # Matnlarni tayyorlash
+    lines = [
+        "🧾 CHEK",
+        f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}",
+        f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}",
+        f"Do‘kon: {STORE_LOCATION_NAME}",
+        "────────────────────────────",
+    ]
+
     for it in items:
         name = str(it.get("name") or "")
         qty = int(it.get("qty") or 0)
         price = it.get("price") or 0
         total = it.get("total") or 0
-        lines.append(name)
-        lines.append(f"  {qty} x {format_money(price)} = {format_money(total)}")
+        lines.append(f"{name} — {qty} x {format_money(price)} = {format_money(total)}")
 
-    lines.append("-" * 40)
-    lines.append(f"Jami: {format_money(s.get('total_amount') or 0)}")
-    lines.append(f"To'lov turi: {s.get('payment_type') or '-'}")
-    lines.append("=" * 40)
-    lines.append("Tashrifingiz uchun rahmat!")
+    lines.append("────────────────────────────")
+    lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
+    lines.append(f"💳 To‘lov turi: {s.get('payment_type') or '-'}")
+    lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
+    lines.append("────────────────────────────")
+    lines.append("Tashrifingiz uchun rahmat! ❤️")
 
-    # Measure max width
+    # O‘lchamni hisoblash
     temp_img = Image.new("RGB", (10, 10))
     draw_temp = ImageDraw.Draw(temp_img)
-    max_w = 0
+    widths = []
+    heights = []
     for ln in lines:
-        # choose measurement font
-        if "CHEK" in ln:
-            w, _ = _measure_text(draw_temp, ln, header_font)
-        elif ln.startswith("Jami:"):
-            w, _ = _measure_text(draw_temp, ln, title_font)
-        else:
-            w, _ = _measure_text(draw_temp, ln, body_font)
-        if w > max_w:
-            max_w = w
+        w, h = _measure_text(draw_temp, ln, body_font)
+        widths.append(w)
+        heights.append(h)
+    max_w = max(widths) + 80
+    total_h = sum(h + 10 for h in heights) + 250  # QR uchun joy
 
-    padding_x = 50
-    padding_y_top = 30
-    img_w = max(600, max_w + padding_x * 2)
+    img_w = max(600, max_w)
+    img_h = max(600, total_h)
 
-    # compute height
-    total_h = padding_y_top
-    for ln in lines:
-        if "CHEK" in ln:
-            _, h = _measure_text(draw_temp, ln, header_font)
-        elif ln.startswith("Jami:"):
-            _, h = _measure_text(draw_temp, ln, title_font)
-        else:
-            _, h = _measure_text(draw_temp, ln, body_font)
-        total_h += h + 8
-    total_h += 220  # space for QR/footer
-    img_h = max(400, total_h)
-
-    # Create image and draw
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
-    y = padding_y_top
+    # Matnni chizish (markazda)
+    y = 40
     for ln in lines:
-        if "CHEK" in ln:
-            font_used = header_font
-        elif ln.startswith("Jami:"):
-            font_used = title_font
-        else:
-            font_used = body_font if len(ln) > 40 else small_font
+        font_used = title_font if "CHEK" in ln else body_font
+        w, h = _measure_text(draw, ln, font_used)
+        x = (img_w - w) // 2  # markazga joylash
+        draw.text((x, y), ln, font=font_used, fill="black")
+        y += h + 10
 
-        try:
-            draw.text((padding_x, y), ln, font=font_used, fill="black")
-        except UnicodeEncodeError:
-            safe_ln = ln.encode("ascii", "ignore").decode()
-            draw.text((padding_x, y), safe_ln, font=font_used, fill="black")
-        except Exception:
-            try:
-                draw.text((padding_x, y), ln, font=_get_font(14), fill="black")
-            except:
-                pass
-
-        _, h = _measure_text(draw, ln, font_used)
-        y += h + 8
-
-    # QR code bottom-right
+    # QR kod pastda markazda
     try:
         qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
         qr = qrcode.make(qr_payload)
-        qr_size = min(180, img_w // 5)
+        qr_size = 180
         qr = qr.resize((qr_size, qr_size))
-        img.paste(qr, (img_w - qr_size - padding_x, img_h - qr_size - 40))
-    except Exception:
-        pass
+        qr_x = (img_w - qr_size) // 2
+        qr_y = img_h - qr_size - 40
+        img.paste(qr, (qr_x, qr_y))
+    except Exception as e:
+        print("QR xatosi:", e)
 
-    # Save to BytesIO
     buf = io.BytesIO()
     buf.name = f"receipt_{sale_id}.png"
-    try:
-        img.save(buf, format="PNG")
-    except Exception:
-        # fallback JPEG
-        try:
-            img = img.convert("RGB")
-            img.save(buf, format="JPEG", quality=95)
-            buf.name = f"receipt_{sale_id}.jpg"
-        except Exception:
-            raise
+    img.save(buf, format="PNG")
     buf.seek(0)
     return buf
-
-
-# ---------------------------
-# Receipt text fallback (existing logic)
-# ---------------------------
-def receipt_text(sale_id):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT s.id, s.total_amount, s.payment_type, s.created_at, c.name as cust_name, c.phone as cust_phone FROM sales s LEFT JOIN customers c ON s.customer_id=c.id WHERE s.id=%s;", (sale_id,))
-    s = cur.fetchone()
-    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
-    lines = []
-    lines.append("🏷️ Chek")
-    created_at = s.get("created_at")
-    if isinstance(created_at, datetime):
-        try:
-            created_at = created_at.astimezone(ZoneInfo(TIMEZONE))
-        except:
-            created_at = created_at + timedelta(hours=5)
-    lines.append(f"Vaqt: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
-    lines.append(f"Do'kon: {STORE_LOCATION_NAME}")
-    seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
-    lines.append(f"Sotuvchi: {seller_display}")
-    lines.append(f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
-    lines.append("--------------")
-    for it in items:
-        lines.append(f"{it.get('name')} — {it.get('qty')} x {format_money(it.get('price'))} = {format_money(it.get('total'))}")
-    lines.append("--------------")
-    lines.append(f"Jami: {format_money(s.get('total_amount') or 0)}")
-    lines.append(f"To'lov turi: {s.get('payment_type')}")
-    lines.append(f"Do'kon lokatsiyasi: {STORE_LOCATION_NAME}")
-    return "\n".join(lines)
-
 
 # ---------------------------
 # Bot handlers (original handlers preserved, only small integration edits)
