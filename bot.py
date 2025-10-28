@@ -1,4 +1,3 @@
-```python
 # bot_jpeg_full.py
 # To'liq, barqaror va ishlaydigan versiya.
 # Asl loyihangizni buzmasdan quyidagi o'zgartirishlar kiritildi:
