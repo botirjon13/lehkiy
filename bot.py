@@ -1,3 +1,4 @@
+```python
 # bot_jpeg_full.py
 # To'liq, barqaror va ishlaydigan versiya.
 # Asl loyihangizni buzmasdan quyidagi o'zgartirishlar kiritildi:
@@ -87,6 +88,8 @@ def main_keyboard():
     kb.row(types.KeyboardButton("🔹 Yangi mahsulot qo'shish"))
     kb.row(types.KeyboardButton("🛒 Mahsulot sotish"))
     kb.row(types.KeyboardButton("📊 Statistika"), types.KeyboardButton("📋 Qarzdorlar ro'yxati"))
+    # Qo'shilgan yangi tugma: Ombor (Excel)
+    kb.row(types.KeyboardButton("📊 Ombor (Excel)"))
     return kb
 
 def cancel_keyboard():
@@ -1036,6 +1039,43 @@ def export_stock_excel():
         writer.close()
     buf.seek(0)
     return buf
+
+# ---------------------------
+# NEW: Export all products as Excel (triggered by menu button "📊 Ombor (Excel)")
+# ---------------------------
+@bot.message_handler(func=lambda m: m.text == "📊 Ombor (Excel)")
+def export_products_excel_handler(m):
+    # Optional: restrict to allowed users
+    if m.from_user.id not in ALLOWED_USERS:
+        bot.send_message(m.chat.id, "❌ Sizga bu amaliyot ruxsat etilmagan.", reply_markup=main_keyboard())
+        return
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not rows:
+            bot.send_message(m.chat.id, "📦 Omborda hech qanday mahsulot yo'q.", reply_markup=main_keyboard())
+            return
+
+        df = pd.DataFrame(rows)
+        buf = io.BytesIO()
+        # Write Excel using pandas/openpyxl
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Ombor")
+            writer.close()
+        buf.seek(0)
+
+        filename = f"products_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+        # telebot accepts file-like objects for send_document
+        bot.send_document(m.chat.id, buf, filename=filename, caption="📊 Ombor ro'yxati (Excel)", reply_markup=main_keyboard())
+    except Exception as e:
+        print("export_products_excel_handler error:", e)
+        bot.send_message(m.chat.id, f"❌ Xatolik: {e}", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
 def cmd_debts(m):
