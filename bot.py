@@ -240,10 +240,11 @@ def _measure_text(draw, text, font):
 # ---------------------------
 def receipt_image_bytes(sale_id):
     """
-    Yangi minimalist chek dizayni:
-    - Matn markazda joylashgan
-    - QR kod pastda o‘rtada
-    - Fon oq rangda
+    Takomillashtirilgan chek dizayni:
+    - Matn markazda
+    - Shriftlar kattaroq (28–32 pt)
+    - Oq fon, ixcham kenglik
+    - QR kodi pastda o‘rtada
     """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -279,14 +280,14 @@ def receipt_image_bytes(sale_id):
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
-    # Fontlar
-    title_font = _get_font(28)
-    body_font = _get_font(22)
-    small_font = _get_font(20)
+    # Kattaroq shriftlar
+    title_font = _get_font(34)
+    body_font = _get_font(28)
+    small_font = _get_font(24)
 
     seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
 
-    # Matnlarni tayyorlash
+    # Matnlar
     lines = [
         "🧾 CHEK",
         f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}",
@@ -309,41 +310,41 @@ def receipt_image_bytes(sale_id):
     lines.append("────────────────────────────")
     lines.append("Tashrifingiz uchun rahmat! ❤️")
 
-    # O‘lchamni hisoblash
+    # Matn hajmini hisoblash
     temp_img = Image.new("RGB", (10, 10))
     draw_temp = ImageDraw.Draw(temp_img)
-    widths = []
-    heights = []
+    widths, heights = [], []
     for ln in lines:
         w, h = _measure_text(draw_temp, ln, body_font)
         widths.append(w)
         heights.append(h)
-    max_w = max(widths) + 80
-    total_h = sum(h + 10 for h in heights) + 250  # QR uchun joy
 
-    img_w = max(600, max_w)
+    # Kenglikni ixcham qilish
+    max_w = max(widths) + 60
+    total_h = sum(h + 12 for h in heights) + 230
+    img_w = min(max(420, max_w), 600)  # ortiqcha kenglikni kamaytirish
     img_h = max(600, total_h)
 
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
-    # Matnni chizish (markazda)
+    # Matnni o‘rtada chizish
     y = 40
     for ln in lines:
         font_used = title_font if "CHEK" in ln else body_font
         w, h = _measure_text(draw, ln, font_used)
-        x = (img_w - w) // 2  # markazga joylash
+        x = (img_w - w) // 2
         draw.text((x, y), ln, font=font_used, fill="black")
-        y += h + 10
+        y += h + 12
 
-    # QR kod pastda markazda
+    # QR kodi pastda markazda
     try:
         qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
         qr = qrcode.make(qr_payload)
         qr_size = 180
         qr = qr.resize((qr_size, qr_size))
         qr_x = (img_w - qr_size) // 2
-        qr_y = img_h - qr_size - 40
+        qr_y = img_h - qr_size - 30
         img.paste(qr, (qr_x, qr_y))
     except Exception as e:
         print("QR xatosi:", e)
@@ -353,49 +354,50 @@ def receipt_image_bytes(sale_id):
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
-    def receipt_text(sale_id):
-    
-        # Chek matn ko‘rinishida yuboriladigan versiya.
-        # (Agar rasm chiqmasa, matn sifatida yuboriladi.)
-        
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
+# matn sifatida boradi
+def receipt_text(sale_id):
+    """
+    Chek matn ko‘rinishida yuboriladigan versiya.
+    (Agar rasm chiqmasa, matn sifatida yuboriladi.)
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
         SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
                c.name as cust_name, c.phone as cust_phone
         FROM sales s 
         LEFT JOIN customers c ON s.customer_id = c.id 
         WHERE s.id=%s;
-        """, (sale_id,))
-        s = cur.fetchone()
-        cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
-        items = cur.fetchall()
-        cur.close()
-        conn.close()
+    """, (sale_id,))
+    s = cur.fetchone()
+    cur.execute("SELECT name, qty, price, total FROM sale_items WHERE sale_id=%s;", (sale_id,))
+    items = cur.fetchall()
+    cur.close()
+    conn.close()
 
-        lines = []
-        lines.append("🏷️ Chek")
-        created_at = s.get("created_at")
+    lines = []
+    lines.append("🧾 Chek №{}".format(sale_id))
+    created_at = s.get("created_at")
     if isinstance(created_at, datetime):
         try:
             created_at = created_at.astimezone(ZoneInfo(TIMEZONE))
         except:
             created_at = created_at + timedelta(hours=5)
-        lines.append(f"📅 Sana: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
-        lines.append(f"🏬 Do‘kon: {STORE_LOCATION_NAME}")
-        seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
-        lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
-        lines.append(f"👤 Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
-        lines.append("────────────────────────────")
+
+    lines.append(f"📅 Sana: {created_at.strftime('%d.%m.%Y %H:%M:%S') if created_at else now_str()}")
+    lines.append(f"🏬 Do‘kon: {STORE_LOCATION_NAME}")
+    seller_display = f"{SELLER_NAME} {SELLER_PHONE}" if SELLER_NAME else f"{SELLER_PHONE}"
+    lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
+    lines.append(f"👤 Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}")
+    lines.append("────────────────────────────")
     for it in items:
         lines.append(f"{it.get('name')} — {it.get('qty')} x {format_money(it.get('price'))} = {format_money(it.get('total'))}")
-        lines.append("────────────────────────────")
-        lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
-        lines.append(f"💳 To‘lov turi: {s.get('payment_type')}")
-        lines.append("────────────────────────────")
-        lines.append("Tashrifingiz uchun rahmat! ❤️")
+    lines.append("────────────────────────────")
+    lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
+    lines.append(f"💳 To‘lov turi: {s.get('payment_type')}")
+    lines.append("────────────────────────────")
+    lines.append("Tashrifingiz uchun rahmat! ❤️")
     return "\n".join(lines)
-
 # ---------------------------
 # Bot handlers (original handlers preserved, only small integration edits)
 # ---------------------------
