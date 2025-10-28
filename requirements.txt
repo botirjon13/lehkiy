@@ -5,3 +5,4 @@ pillow>=10.0.0
 qrcode
 pandas
 openpyxl
+python-telegram-bot==20.3
