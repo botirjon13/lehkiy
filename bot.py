@@ -27,6 +27,7 @@ import tempfile
 import psycopg2
 import os
 from datetime import datetime
+import traceback
 
 # --- Load env ---
 load_dotenv()
