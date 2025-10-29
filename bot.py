@@ -164,7 +164,7 @@ def save_user_cart(uid, data):
 
 
 # Allowed users (preserve original). Replace with your Telegram IDs.
-ALLOWED_USERS = [1262207928, 298157746, 123456789]
+ALLOWED_USERS = [1262207928, 298157746, 963690743]
 
 
 # ---------------------------
