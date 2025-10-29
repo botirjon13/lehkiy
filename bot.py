@@ -1022,6 +1022,13 @@ def generate_stats_df(start_dt, end_dt):
     return df
 
 def make_excel_from_df(df, title, start_dt, end_dt):
+    import io
+    import pandas as pd
+    from datetime import datetime
+
+    def now_str():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         meta = pd.DataFrame([{
@@ -1031,11 +1038,13 @@ def make_excel_from_df(df, title, start_dt, end_dt):
             "Yaratildi": now_str()
         }])
         meta.to_excel(writer, index=False, sheet_name="Meta")
+
         if df.empty:
-            pd.DataFrame([{"Xabar":"Ushbu davrda hech qanday mahsulot sotilmagan."}]).to_excel(writer, index=False, sheet_name="Hisobot")
+            pd.DataFrame([{"Xabar": "Ushbu davrda hech qanday mahsulot sotilmagan."}]).to_excel(
+                writer, index=False, sheet_name="Hisobot"
+            )
         else:
             df.to_excel(writer, index=False, sheet_name="Hisobot")
-            # totals
             ws = writer.sheets["Hisobot"]
             start_row = len(df) + 2
             ws.cell(row=start_row, column=2, value="Jami")
@@ -1043,7 +1052,7 @@ def make_excel_from_df(df, title, start_dt, end_dt):
             ws.cell(row=start_row, column=5, value=int(df["total_sold"].sum()))
             ws.cell(row=start_row, column=6, value=int(df["total_cost"].sum()))
             ws.cell(row=start_row, column=7, value=int(df["profit"].sum()))
-        writer.save()
+
     out.seek(0)
     return out
 
