@@ -959,59 +959,196 @@ def cmd_statistics(m):
     kb.add(types.InlineKeyboardButton("Ombor holati (excel/pdf)", callback_data="stock_export"))
     bot.send_message(m.chat.id, "Statistika variantlari:", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("stat_"))
-def cb_stat(c):
-    cmd = c.data
-    if cmd == "stat_search_id":
-        set_state(c.from_user.id, "action", "stat_search_by_id")
-        bot.send_message(c.message.chat.id, "Sotuv ID ni kiriting:", reply_markup=cancel_keyboard())
-    elif cmd in ("stat_daily","stat_monthly","stat_yearly"):
-        period = cmd.split("_")[1]
-        img_buf = stats_image_bytes(period)
-        img_buf.seek(0)
-        bot.send_photo(c.message.chat.id, img_buf, caption=f"{period} hisobot (rasm)")
-    elif cmd == "stock_export":
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
-        set_state(c.from_user.id, "action", "stock_export_choose_format")
-        bot.send_message(c.from_user.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
-    bot.answer_callback_query(c.id)
+# --- REPLACE existing stats handler with this block ---
+from datetime import date, time
 
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stock_export_choose_format")
-def stock_export_choose_format(m):
-    uid = m.from_user.id
-    txt = (m.text or "").strip().lower()
-    if txt == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if txt not in ("excel", "pdf", "rasm"):
-        bot.send_message(m.chat.id, "Iltimos Excel yoki Rasm ni tanlang.", reply_markup=cancel_keyboard()); return
-    if txt == "excel":
-        bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
+def _period_range_for(period_key):
+    try:
+        tz = ZoneInfo(TIMEZONE)
+    except Exception:
+        tz = None
+    now = datetime.now(tz) if tz else datetime.utcnow() + timedelta(hours=5)
+    today = now.date()
+    if period_key == "daily":
+        start = datetime.combine(today, time.min)
+        end = start + timedelta(days=1)
+    elif period_key == "monthly":
+        start = datetime.combine(date(today.year, today.month, 1), time.min)
+        if today.month == 12:
+            end = datetime.combine(date(today.year+1, 1, 1), time.min)
+        else:
+            end = datetime.combine(date(today.year, today.month+1, 1), time.min)
+    elif period_key == "yearly":
+        start = datetime.combine(date(today.year, 1, 1), time.min)
+        end = datetime.combine(date(today.year+1, 1, 1), time.min)
     else:
-        img_buf = export_stock_image()
-        img_buf.seek(0)
-        bot.send_photo(m.chat.id, img_buf, caption="Ombor holati (rasm)", reply_markup=main_keyboard())
-    clear_state(uid)
+        raise ValueError("Unknown period")
+    if tz:
+        start = start.replace(tzinfo=tz)
+        end = end.replace(tzinfo=tz)
+    return start, end
 
-def export_stock_excel():
+def generate_stats_df(start_dt, end_dt):
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+    cur.execute("""
+        SELECT si.product_id, si.name AS product_name,
+               SUM(si.qty) AS sold_qty,
+               SUM(si.total) AS total_sold,
+               COALESCE(p.cost_price,0) AS cost_price
+        FROM sale_items si
+        JOIN sales s ON s.id = si.sale_id
+        LEFT JOIN products p ON p.id = si.product_id
+        WHERE s.created_at >= %s AND s.created_at < %s
+        GROUP BY si.product_id, si.name, p.cost_price
+        ORDER BY si.name;
+    """, (start_dt, end_dt))
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
     if not rows:
-        df = pd.DataFrame([{"Xabar": "Omborda hech qanday mahsulot yo'q"}])
-    else:
-        df = pd.DataFrame(rows)
+        return pd.DataFrame(columns=["product_id","name","sold_qty","cost_price","total_sold","total_cost","profit"])
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Ombor")
-        writer.close()
-    buf.seek(0)
-    return buf
+    df = pd.DataFrame(rows)
+    df["sold_qty"] = df["sold_qty"].astype(int)
+    df["total_sold"] = df["total_sold"].astype(int)
+    df["cost_price"] = df["cost_price"].astype(int)
+    df["total_cost"] = df["sold_qty"] * df["cost_price"]
+    df["profit"] = df["total_sold"] - df["total_cost"]
+    df = df.rename(columns={"product_name":"name"})
+    df = df[["product_id","name","sold_qty","cost_price","total_sold","total_cost","profit"]]
+    return df
+
+def make_excel_from_df(df, title, start_dt, end_dt):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        meta = pd.DataFrame([{
+            "Hisobot": title,
+            "Sana boshi": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Sana oxiri": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Yaratildi": now_str()
+        }])
+        meta.to_excel(writer, index=False, sheet_name="Meta")
+        if df.empty:
+            pd.DataFrame([{"Xabar":"Ushbu davrda hech qanday mahsulot sotilmagan."}]).to_excel(writer, index=False, sheet_name="Hisobot")
+        else:
+            df.to_excel(writer, index=False, sheet_name="Hisobot")
+            # totals
+            ws = writer.sheets["Hisobot"]
+            start_row = len(df) + 2
+            ws.cell(row=start_row, column=2, value="Jami")
+            ws.cell(row=start_row, column=3, value=int(df["sold_qty"].sum()))
+            ws.cell(row=start_row, column=5, value=int(df["total_sold"].sum()))
+            ws.cell(row=start_row, column=6, value=int(df["total_cost"].sum()))
+            ws.cell(row=start_row, column=7, value=int(df["profit"].sum()))
+        writer.save()
+    out.seek(0)
+    return out
+
+def generate_sale_excel_by_id(sale_id):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT s.id AS sale_id, s.created_at, s.total_amount, s.payment_type, c.name as cust_name, c.phone as cust_phone
+        FROM sales s
+        LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE s.id = %s;
+    """, (sale_id,))
+    sale = cur.fetchone()
+    if not sale:
+        cur.close(); conn.close()
+        return None
+    cur.execute("""
+        SELECT si.product_id, si.name, si.qty, si.price, si.total, COALESCE(p.cost_price,0) AS cost_price
+        FROM sale_items si
+        LEFT JOIN products p ON p.id = si.product_id
+        WHERE si.sale_id = %s;
+    """, (sale_id,))
+    items = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        sale_meta = pd.DataFrame([{
+            "Sale ID": sale["sale_id"],
+            "Sana": sale["created_at"].strftime("%Y-%m-%d %H:%M:%S") if sale["created_at"] else "",
+            "Mijoz": sale.get("cust_name") or "",
+            "Telefon": sale.get("cust_phone") or "",
+            "To'lov turi": sale.get("payment_type") or "",
+            "Jami summa": sale.get("total_amount") or 0
+        }])
+        sale_meta.to_excel(writer, index=False, sheet_name="Sale")
+        if not items:
+            pd.DataFrame([{"Xabar":"Ushbu chekda elementlar yo'q"}]).to_excel(writer, index=False, sheet_name="Items")
+        else:
+            df_items = pd.DataFrame(items)
+            df_items.to_excel(writer, index=False, sheet_name="Items")
+        writer.save()
+    out.seek(0)
+    return out
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("stat_"))
+def cb_stat(c):
+    try:
+        cmd = c.data
+        # ID search flow
+        if cmd == "stat_search_id":
+            set_state(c.from_user.id, "action", "stat_search_by_id")
+            bot.send_message(c.message.chat.id, "Sotuv ID ni kiriting:", reply_markup=cancel_keyboard())
+            bot.answer_callback_query(c.id)
+            return
+
+        if cmd == "stock_export":
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
+            set_state(c.from_user.id, "action", "stock_export_choose_format")
+            bot.send_message(c.from_user.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
+            bot.answer_callback_query(c.id)
+            return
+
+        # map to period
+        period_map = {"stat_daily":"daily", "stat_monthly":"monthly", "stat_yearly":"yearly"}
+        if cmd not in period_map:
+            bot.answer_callback_query(c.id, "Noma'lum buyruq")
+            return
+
+        period_key = period_map[cmd]
+        start_dt, end_dt = _period_range_for(period_key)
+        df = generate_stats_df(start_dt, end_dt)
+        title = f"{period_key.title()} hisobot"
+        excel_buf = make_excel_from_df(df, title, start_dt, end_dt)
+        filename = f"hisobot_{period_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        bot.send_document(c.message.chat.id, excel_buf, visible_file_name=filename, caption=f"{title}: {start_dt.strftime('%Y-%m-%d')} — {(end_dt - timedelta(seconds=1)).strftime('%Y-%m-%d')}")
+        bot.answer_callback_query(c.id)
+    except Exception as e:
+        print("cb_stat error:", e)
+        traceback.print_exc()
+        try:
+            bot.answer_callback_query(c.id, "Xatolik yuz berdi")
+        except:
+            pass
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stat_search_by_id")
+def stat_search_by_id_handler(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if txt.lower() == "bekor qilish":
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos to'g'ri ID kiriting (son).", reply_markup=cancel_keyboard())
+        return
+    sale_id = int(txt)
+    clear_state(uid)
+    excel_buf = generate_sale_excel_by_id(sale_id)
+    if not excel_buf:
+        bot.send_message(m.chat.id, f"Sotuv topilmadi: ID={sale_id}", reply_markup=main_keyboard())
+        return
+    filename = f"chek_{sale_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    bot.send_document(m.chat.id, excel_buf, visible_file_name=filename, caption=f"Chek №{sale_id} hisobot (Excel)", reply_markup=main_keyboard())
 
 # ---------------------------
 # NEW: Export all products as Excel (triggered by menu button "📊 Ombor (Excel)")
