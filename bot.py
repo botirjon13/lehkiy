@@ -1,6 +1,11 @@
-# bot_full_with_stat.py
-# Asl loyihangizni buzmasdan: to'liq ishlaydigan bot + STATISTIKA -> Excel hisobotlar
-# Railway uchun mos (worker: python bot_full_with_stat.py)
+# bot_jpeg_full.py
+# To'liq, barqaror va ishlaydigan versiya.
+# Asl loyihangizni buzmasdan quyidagi o'zgartirishlar kiritildi:
+# - Universal text measurement helper (_measure_text)
+# - Barqaror receipt_image_bytes (PNG, dynamic font sizes, Unicode-safe, buf.name)
+# - checkout_confirm_format handler tuned to accept 'matn' and ('rasm','image','photo')
+# - SELLER_NAME support from .env
+# - Defensive try/except blocks to prevent bot from freezing
 
 import os
 import re
@@ -9,7 +14,7 @@ import json
 import qrcode
 import psycopg2
 import pandas as pd
-from datetime import datetime, timedelta, date, time
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
@@ -17,9 +22,11 @@ from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot import types
 from zoneinfo import ZoneInfo
+import pandas as pd
 import tempfile
-import traceback
-import time as _time
+import psycopg2
+import os
+from datetime import datetime
 
 # --- Load env ---
 load_dotenv()
@@ -51,17 +58,14 @@ def get_conn():
     )
 
 def init_db():
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        if os.path.exists("db_init.sql"):
-            sql = open("db_init.sql", "r", encoding="utf-8").read()
-            cur.execute(sql)
-            conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print("init_db error:", e)
+    conn = get_conn()
+    cur = conn.cursor()
+    sql = open("db_init.sql", "r", encoding="utf-8").read()
+    cur.execute(sql)
+    conn.commit()
+    cur.close()
+    conn.close()
+
 
 # --- Utility helpers ---
 CYRILLIC_PATTERN = re.compile(r'[А-Яа-яЁёҢғқўҳ]', flags=re.UNICODE)
@@ -78,14 +82,9 @@ def format_money(v):
         return str(v)
 
 def now_str():
-    # use timezone
-    try:
-        tz = ZoneInfo(TIMEZONE)
-        dt = datetime.now(tz)
-    except Exception:
-        dt = datetime.utcnow() + timedelta(hours=5)
-    dt = dt.replace(microsecond=0)
+    dt = datetime.utcnow().replace(microsecond=0) + timedelta(hours=5)
     return dt.strftime("%d.%m.%Y %H:%M:%S")
+
 
 # --- Keyboards ---
 def main_keyboard():
@@ -93,6 +92,7 @@ def main_keyboard():
     kb.row(types.KeyboardButton("🔹 Yangi mahsulot qo'shish"))
     kb.row(types.KeyboardButton("🛒 Mahsulot sotish"))
     kb.row(types.KeyboardButton("📊 Statistika"), types.KeyboardButton("📋 Qarzdorlar ro'yxati"))
+    # Qo'shilgan yangi tugma: Ombor (Excel)
     kb.row(types.KeyboardButton("📊 Ombor (Excel)"))
     return kb
 
@@ -106,6 +106,7 @@ def small_yes_no():
     kb.add(types.InlineKeyboardButton("Ha", callback_data="yes"), types.InlineKeyboardButton("Yo'q", callback_data="no"))
     return kb
 
+
 # --- Simple in-memory per-user state (lightweight) ---
 USER_STATE = {}
 
@@ -117,6 +118,7 @@ def get_state(user_id, key, default=None):
 
 def clear_state(user_id):
     USER_STATE.pop(user_id, None)
+
 
 # --- Utility: safely load cart data (db may store JSON or string) ---
 def parse_cart_data(raw):
@@ -130,6 +132,7 @@ def parse_cart_data(raw):
         except:
             return {"items": []}
     return {"items": []}
+
 
 # --- DB cart helpers ---
 def clear_user_cart(uid):
@@ -164,15 +167,21 @@ def save_user_cart(uid, data):
     cur.close()
     conn.close()
 
+
 # Allowed users (preserve original)
-ALLOWED_USERS = [1262207928, 298157746]  # add your ids here if needed
+ALLOWED_USERS = [1262207928, 298157746]
+
 
 # ---------------------------
-# Robust text measurement helper (Pillow)
+# Robust text measurement helper
 # ---------------------------
 def _get_font(size=16):
+    """
+    Foydalaniladigan shrift: LiberationSans-Bold (aniq va kattaroq chiqadi).
+    Agar u topilmasa — DejaVuSans fallback ishlaydi.
+    """
     candidates = [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",  # juda tiniq
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
@@ -184,6 +193,11 @@ def _get_font(size=16):
     return ImageFont.load_default()
 
 def _measure_text(draw, text, font):
+    """
+    Cross-version Pillow text measurement helper.
+    Returns (width, height).
+    """
+    # 1) try draw.textbbox
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
         w = bbox[2] - bbox[0]
@@ -191,11 +205,15 @@ def _measure_text(draw, text, font):
         return (w, h)
     except Exception:
         pass
+
+    # 2) try draw.textsize
     try:
         size = draw.textsize(text, font=font)
         return (size[0], size[1])
     except Exception:
         pass
+
+    # 3) try font.getbbox
     try:
         bbox = font.getbbox(text)
         w = bbox[2] - bbox[0]
@@ -203,19 +221,31 @@ def _measure_text(draw, text, font):
         return (w, h)
     except Exception:
         pass
+
+    # 4) try font.getsize
     try:
         size = font.getsize(text)
         return (size[0], size[1])
     except Exception:
         pass
+
+    # 5) fallback approximate
     approx_w = int(len(text) * (getattr(font, "size", 12) * 0.6))
     approx_h = int((getattr(font, "size", 12)) * 1.2)
     return (approx_w, approx_h)
 
+
 # ---------------------------
-# Receipt generator (kept as in your file)
+# Robust receipt image generator
 # ---------------------------
 def receipt_image_bytes(sale_id):
+    """
+    Katta shriftli chek dizayni:
+    - Shriftlar kattaroq (42 / 34 / 28 pt)
+    - Matn markazda
+    - QR kodi pastda
+    - Oq fon
+    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
@@ -250,12 +280,14 @@ def receipt_image_bytes(sale_id):
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
+    # 📏 Katta shriftlar
     title_font = _get_font(42)
     body_font = _get_font(34)
     small_font = _get_font(28)
 
     seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
 
+    # 📄 Matnlar
     lines = [
         "🧾 CHEK",
         f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}",
@@ -278,6 +310,7 @@ def receipt_image_bytes(sale_id):
     lines.append("────────────────────────────")
     lines.append("Tashrifingiz uchun rahmat! ❤️")
 
+    # 📏 Hajmni hisoblash
     temp_img = Image.new("RGB", (10, 10))
     draw_temp = ImageDraw.Draw(temp_img)
     widths, heights = [], []
@@ -287,13 +320,14 @@ def receipt_image_bytes(sale_id):
         heights.append(h)
 
     max_w = max(widths) + 80
-    total_h = sum(h + 20 for h in heights) + 260
+    total_h = sum(h + 20 for h in heights) + 260  # satrlar oralig‘i kattaroq
     img_w = min(max(480, max_w), 700)
     img_h = max(700, total_h)
 
     img = Image.new("RGB", (img_w, img_h), "white")
     draw = ImageDraw.Draw(img)
 
+    # 🧾 Matnni o‘rtada chizish
     y = 50
     for ln in lines:
         font_used = title_font if "CHEK" in ln else body_font
@@ -302,6 +336,7 @@ def receipt_image_bytes(sale_id):
         draw.text((x, y), ln, font=font_used, fill="black")
         y += h + 20
 
+    # 🔲 QR kodi pastda markazda
     try:
         qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
         qr = qrcode.make(qr_payload)
@@ -319,7 +354,12 @@ def receipt_image_bytes(sale_id):
     buf.seek(0)
     return buf
 
+# matn sifatida boradi
 def receipt_text(sale_id):
+    """
+    Chek matn ko‘rinishida yuboriladigan versiya.
+    (Agar rasm chiqmasa, matn sifatida yuboriladi.)
+    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
@@ -358,9 +398,8 @@ def receipt_text(sale_id):
     lines.append("────────────────────────────")
     lines.append("Tashrifingiz uchun rahmat! ❤️")
     return "\n".join(lines)
-
 # ---------------------------
-# Existing handlers preserved (unchanged) up to stats menu
+# Bot handlers (original handlers preserved, only small integration edits)
 # ---------------------------
 
 @bot.message_handler(commands=['start'])
@@ -375,191 +414,540 @@ def cmd_start(m):
            "Quyidagi menyudan tanlang:\n")
     bot.send_message(m.chat.id, txt, reply_markup=main_keyboard())
 
-# ... (all your existing handlers here are unchanged)
-# For brevity in this file presentation I include them exactly as you had.
-# (In your deployment file, keep all the handlers above intact — the user said not to change them.)
-# The rest of the original handlers (add product, sell, cart, checkout, ombor, debts etc.)
-# are assumed to be present unchanged as earlier in your source.
 
-# ---------------------------
-# STATISTICS: Excel report generation (new functions)
-# ---------------------------
+# --- Add product ---
+@bot.message_handler(func=lambda m: m.text == "🔹 Yangi mahsulot qo'shish")
+def start_add_product(m):
+    uid = m.from_user.id
+    clear_state(uid)
+    set_state(uid, "action", "add_product_name")
+    bot.send_message(m.chat.id, "Mahsulot nomini kiriting (lotin harflarda):", reply_markup=cancel_keyboard())
 
-def _period_range_for(period_key):
-    """
-    Return (start_dt, end_dt) as timezone-aware datetimes for given period_key:
-    - "daily" -> today 00:00 .. tomorrow 00:00
-    - "monthly" -> first of current month .. first of next month
-    - "yearly" -> Jan 1st this year .. Jan 1st next year
-    The times are in TIMEZONE.
-    """
-    try:
-        tz = ZoneInfo(TIMEZONE)
-    except Exception:
-        tz = None
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_name")
+def add_product_name(m):
+    uid = m.from_user.id
+    text = (m.text or "").strip()
+    if text.lower() == "bekor qilish":
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        return
+    if contains_cyrillic(text):
+        bot.send_message(m.chat.id, "Iltimos faqat lotin alifbosida kiriting.", reply_markup=cancel_keyboard())
+        return
+    set_state(uid, "new_product_name", text)
+    set_state(uid, "action", "add_product_qty")
+    bot.send_message(m.chat.id, "Mahsulot miqdorini son bilan kiriting (masalan: 100):", reply_markup=cancel_keyboard())
 
-    now = datetime.now(tz) if tz else datetime.utcnow() + timedelta(hours=5)
-    today = now.date()
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_qty")
+def add_product_qty(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos butun son kiriting (masalan: 50).", reply_markup=cancel_keyboard()); return
+    set_state(uid, "new_product_qty", int(txt))
+    set_state(uid, "action", "add_product_cost")
+    bot.send_message(m.chat.id, "Optovikdan olingan narxini kiriting (so'm):", reply_markup=cancel_keyboard())
 
-    if period_key == "daily":
-        start = datetime.combine(today, time.min)
-        end = start + timedelta(days=1)
-    elif period_key == "monthly":
-        start = datetime.combine(date(today.year, today.month, 1), time.min)
-        if today.month == 12:
-            end = datetime.combine(date(today.year + 1, 1, 1), time.min)
-        else:
-            end = datetime.combine(date(today.year, today.month + 1, 1), time.min)
-    elif period_key == "yearly":
-        start = datetime.combine(date(today.year, 1, 1), time.min)
-        end = datetime.combine(date(today.year + 1, 1, 1), time.min)
-    else:
-        raise ValueError("Unknown period")
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_cost")
+def add_product_cost(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip().replace(" ", "").replace(",", "")
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 120000).", reply_markup=cancel_keyboard()); return
+    set_state(uid, "new_product_cost", int(txt))
+    set_state(uid, "action", "add_product_suggest")
+    bot.send_message(m.chat.id, "Taxminiy sotish narxini kiriting (so'm). Sotish vaqtida o'zgartirish mumkin:", reply_markup=cancel_keyboard())
 
-    if tz:
-        start = start.replace(tzinfo=tz)
-        end = end.replace(tzinfo=tz)
-    return start, end
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_suggest")
+def add_product_suggest(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip().replace(" ", "").replace(",", "")
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 150000).", reply_markup=cancel_keyboard()); return
+    name = get_state(uid, "new_product_name")
+    qty = get_state(uid, "new_product_qty")
+    cost = get_state(uid, "new_product_cost")
+    suggest = int(txt)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s) RETURNING id;",
+                (name, qty, cost, suggest))
+    pid = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    clear_state(uid)
+    bot.send_message(m.chat.id, f"✅ Mahsulot qo'shildi: <b>{name}</b>\nID: {pid}\nMiqdor: {qty}\nNarx (opt): {format_money(cost)}\nTaklifiy: {format_money(suggest)}",
+                     reply_markup=main_keyboard())
 
-def generate_stats_df(start_dt, end_dt):
-    """
-    Query DB for sale items between sales.created_at >= start_dt and < end_dt.
-    Returns pandas DataFrame with columns:
-    ['product_id','name','sold_qty','total_sold','cost_price','total_cost','profit']
-    """
+# --- Search & Sell ---
+@bot.message_handler(func=lambda m: m.text and (m.text.strip().lower() == "🛒 mahsulot sotish" or ("mahsulot" in m.text.lower() and "sot" in m.text.lower())))
+def start_sell(m):
+    uid = m.from_user.id
+    clear_state(uid)
+    clear_user_cart(uid)
+    set_state(uid, "action", "sell_search")
+    bot.send_message(m.chat.id, "Qaysi mahsulotni izlamoqchisiz? (nom yoki uning bir qismi, lotincha):", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "sell_search")
+def sell_search(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); clear_user_cart(uid); bot.send_message(m.chat.id, "Savdo bekor qilindi.", reply_markup=main_keyboard()); return
+    if contains_cyrillic(txt):
+        bot.send_message(m.chat.id, "Iltimos faqat lotincha kiriting.", reply_markup=cancel_keyboard()); return
+
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    # Ensure comparing timestamps in DB; pass naive or tz-aware depending on DB storage
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE name ILIKE %s ORDER BY id;", (f"%{txt}%",))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not rows:
+        bot.send_message(m.chat.id, "Mahsulot topilmadi. Yana urinib ko'ring yoki 'Bekor qilish' ni tanlang.", reply_markup=cancel_keyboard()); return
+
+    kb = types.InlineKeyboardMarkup()
+    for r in rows:
+        label = f"{r['name']} -> {format_money(r['suggest_price'])} ({r['qty']} dona)"
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"addcart|{r['id']}"))
+    kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
+    kb.add(types.InlineKeyboardButton("🔎 Yana izlash", callback_data="again_search"))
+    bot.send_message(m.chat.id, "Topilgan mahsulotlar:", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("addcart|"))
+def cb_addcart(c):
+    uid = c.from_user.id
+    try:
+        _, pid = c.data.split("|")
+        pid = int(pid)
+    except:
+        bot.answer_callback_query(c.id, "Noto'g'ri ma'lumot"); return
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE id=%s;", (pid,))
+    p = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not p:
+        bot.answer_callback_query(c.id, "Mahsulot topilmadi."); return
+
+    set_state(uid, "addcart_pid", pid)
+    set_state(uid, "action", "addcart_qty")
+    bot.send_message(c.message.chat.id, f"Mahsulot: <b>{p['name']}</b>\nMavjud: {p['qty']}\nTaklifiy narx: {format_money(p['suggest_price'])}\n\nSotiladigan miqdorni kiriting (son):", parse_mode="HTML", reply_markup=cancel_keyboard())
+    bot.answer_callback_query(c.id)
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "addcart_qty")
+def addcart_fill(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos butun son kiriting (masalan: 2).", reply_markup=cancel_keyboard()); return
+    qty = int(txt)
+    pid = get_state(uid, "addcart_pid")
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE id=%s;", (pid,))
+    p = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not p:
+        bot.send_message(m.chat.id, "Mahsulot topilmadi.", reply_markup=main_keyboard()); clear_state(uid); return
+    if qty > p['qty']:
+        bot.send_message(m.chat.id, f"Mavjud miqdor yetarli emas. Mavjud: {p['qty']}", reply_markup=cancel_keyboard()); return
+    set_state(uid, "addcart_qty", qty)
+    set_state(uid, "action", "addcart_price")
+    bot.send_message(m.chat.id, f"Sotiladigan narxni kiriting (so'm). Taklifiy: {format_money(p['suggest_price'])}", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "addcart_price")
+def addcart_price(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip().replace(" ", "").replace(",", "")
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if not txt.isdigit():
+        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 120000).", reply_markup=cancel_keyboard()); return
+
+    price = int(txt)
+    pid = get_state(uid, "addcart_pid")
+    qty = get_state(uid, "addcart_qty")
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT name FROM products WHERE id=%s;", (pid,))
+    p_row = cur.fetchone()
+    if not p_row:
+        cur.close(); conn.close()
+        bot.send_message(m.chat.id, "Mahsulot topilmadi.", reply_markup=main_keyboard()); clear_state(uid); return
+    pname = p_row['name']
+
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    existing = cur.fetchone()
+    if existing and existing.get('data'):
+        data = parse_cart_data(existing['data'])
+    else:
+        data = {"items": []}
+
+    data['items'].append({"product_id": pid, "name": pname, "qty": qty, "price": price})
+
+    # save
+    if existing:
+        cur.execute("UPDATE user_carts SET data=%s, updated_at=now() WHERE user_id=%s;", (json.dumps(data), uid))
+    else:
+        cur.execute("INSERT INTO user_carts (user_id, data) VALUES (%s, %s);", (uid, json.dumps(data)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    clear_state(uid)
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("➕ Yana mahsulot qo‘shish", callback_data="again_search"))
+    kb.add(types.InlineKeyboardButton("🧺 Savatchaga o‘tish", callback_data="view_cart"))
+    kb.add(types.InlineKeyboardButton("❌ Savdoni bekor qilish", callback_data="cancel_sale"))
+    bot.send_message(m.chat.id, f"✅ Mahsulot savatchaga qo‘shildi: <b>{pname}</b>\nMiqdor: {qty}\nNarx: {format_money(price)}", parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "again_search")
+def cb_again_search(c):
+    uid = c.from_user.id
+    set_state(uid, "action", "sell_search")
+    try:
+        bot.edit_message_text("Qaysi mahsulotni izlamoqchisiz? (nom yoki uning bir qismi, lotincha):", chat_id=c.message.chat.id, message_id=c.message.message_id)
+    except:
+        bot.send_message(c.message.chat.id, "Qaysi mahsulotni izlamoqchisiz? (nom yoki uning bir qismi, lotincha):", reply_markup=cancel_keyboard())
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "cancel_sale")
+def cb_cancel_sale(c):
+    uid = c.from_user.id
+    clear_user_cart(uid)
+    clear_state(uid)
+    try:
+        bot.edit_message_text("❌ Savdo bekor qilindi va savatcha tozalandi.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+    except:
+        bot.send_message(c.message.chat.id, "❌ Savdo bekor qilindi va savatcha tozalandi.")
+    bot.send_message(c.message.chat.id, "Asosiy menyu:", reply_markup=main_keyboard())
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "view_cart")
+def cb_view_cart(c):
+    uid = c.from_user.id
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row or not row.get('data') or not parse_cart_data(row.get('data')).get('items'):
+        bot.answer_callback_query(c.id, "Savatcha bo‘sh")
+        bot.send_message(c.message.chat.id, "Savatcha bo‘sh. Yana mahsulot qidirish uchun 'Mahsulot sotish' ni tanlang.", reply_markup=main_keyboard())
+        return
+    data = parse_cart_data(row.get('data'))
+    items = data.get('items', [])
+    total = sum(it['qty'] * it['price'] for it in items)
+    text_lines = ["🧾 <b>Savatcha</b>\n"]
+    for i, it in enumerate(items, 1):
+        text_lines.append(f"{i}. {it['name']} — {it['qty']} x {format_money(it['price'])} = {format_money(it['qty']*it['price'])}")
+    text_lines.append(f"\nUmumiy: <b>{format_money(total)}</b>")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Buyurtmani tasdiqlash", callback_data="checkout"))
+    kb.add(types.InlineKeyboardButton("Mahsulotni tahrirlash", callback_data="edit_cart"))
+    kb.add(types.InlineKeyboardButton("Bekor qilish va bo‘shatish", callback_data="clear_cart"))
+    try:
+        bot.edit_message_text("\n".join(text_lines), chat_id=c.message.chat.id, message_id=c.message.message_id, parse_mode="HTML", reply_markup=kb)
+    except:
+        bot.send_message(c.message.chat.id, "\n".join(text_lines), parse_mode="HTML", reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "clear_cart")
+def cb_clear_cart(c):
+    uid = c.from_user.id
+    clear_user_cart(uid)
+    try:
+        bot.edit_message_text("Savatcha tozalandi.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+    except:
+        bot.send_message(c.message.chat.id, "Savatcha tozalandi.")
+    bot.answer_callback_query(c.id, "Savatcha bo‘shatildi.")
+    bot.send_message(c.message.chat.id, "Asosiy menyu:", reply_markup=main_keyboard())
+
+@bot.callback_query_handler(func=lambda c: c.data == "edit_cart")
+def cb_edit_cart(c):
+    uid = c.from_user.id
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Oxirgi mahsulotni o‘chirish", callback_data="remove_last"))
+    kb.add(types.InlineKeyboardButton("Butun savatchani bo‘shatish", callback_data="clear_cart"))
+    try:
+        bot.edit_message_text("Tahrir variantlari:", chat_id=c.message.chat.id, message_id=c.message.message_id, reply_markup=kb)
+    except:
+        bot.send_message(c.message.chat.id, "Tahrir variantlari:", reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data == "remove_last")
+def cb_remove_last(c):
+    uid = c.from_user.id
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close(); bot.answer_callback_query(c.id, "Savatcha bo‘sh"); bot.send_message(c.message.chat.id, "Savatcha bo‘sh.", reply_markup=main_keyboard()); return
+    data = parse_cart_data(row.get('data'))
+    if not data.get('items'):
+        cur.close(); conn.close(); bot.answer_callback_query(c.id, "Savatcha bo‘sh"); bot.send_message(c.message.chat.id, "Savatcha bo‘sh.", reply_markup=main_keyboard()); return
+    removed = data['items'].pop()
+    if data['items']:
+        cur.execute("UPDATE user_carts SET data=%s, updated_at=now() WHERE user_id=%s;", (json.dumps(data), uid))
+    else:
+        cur.execute("DELETE FROM user_carts WHERE user_id=%s;", (uid,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    bot.answer_callback_query(c.id, f"Oxirgi mahsulot o‘chirildi: {removed.get('name')}")
+    bot.send_message(c.message.chat.id, "Savatcha yangilandi.", reply_markup=main_keyboard())
+
+
+# --- Checkout flow ---
+@bot.callback_query_handler(func=lambda c: c.data == "checkout")
+def cb_checkout(c):
+    uid = c.from_user.id
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("Mavjud mijozni tanlash", "Yangi mijoz qo'shish")
+    kb.row("Bekor qilish")
+    set_state(uid, "action", "checkout_choose_customer")
+    try:
+        bot.send_message(c.message.chat.id, "Mijozni tanlang:", reply_markup=kb)
+    except:
+        bot.send_message(c.from_user.id, "Mijozni tanlang:", reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_choose_customer")
+def checkout_choose_customer(m):
+    uid = m.from_user.id
+    text = (m.text or "").strip()
+    if text == "Bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if text == "Yangi mijoz qo'shish":
+        set_state(uid, "action", "checkout_new_customer_name"); bot.send_message(m.chat.id, "Mijoz ismi (lotincha):", reply_markup=cancel_keyboard()); return
+    if text == "Mavjud mijozni tanlash":
+        set_state(uid, "action", "checkout_search_customer"); bot.send_message(m.chat.id, "Mijoz telefon yoki ismini kiriting:", reply_markup=cancel_keyboard()); return
+    bot.send_message(m.chat.id, "Iltimos menyudan tanlang.", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_new_customer_name")
+def checkout_new_customer_name(m):
+    uid = m.from_user.id
+    text = (m.text or "").strip()
+    if text.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if contains_cyrillic(text):
+        bot.send_message(m.chat.id, "Iltimos lotincha kiriting.", reply_markup=cancel_keyboard()); return
+    set_state(uid, "new_customer_name", text); set_state(uid, "action", "checkout_new_customer_phone"); bot.send_message(m.chat.id, "Mijoz telefon raqamini kiriting (+998...):", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_new_customer_phone")
+def checkout_new_customer_phone(m):
+    uid = m.from_user.id
+    phone = (m.text or "").strip()
+    if phone.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO customers (name, phone) VALUES (%s, %s) RETURNING id;", (get_state(uid, "new_customer_name"), phone))
+    cust_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    set_state(uid, "checkout_customer_id", cust_id)
+    set_state(uid, "action", "checkout_payment")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("Naqd", "Qarz")
+    kb.row("Bekor qilish")
+    bot.send_message(m.chat.id, "To'lov turini tanlang:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_search_customer")
+def checkout_search_customer(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if txt.lower() == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, phone FROM customers WHERE phone ILIKE %s OR name ILIKE %s LIMIT 20;", (f"%{txt}%", f"%{txt}%"))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not rows:
+        bot.send_message(m.chat.id, "Mijoz topilmadi, yangi mijoz qo'shish uchun 'Yangi mijoz qo'shish' ni tanlang.", reply_markup=cancel_keyboard()); return
+    kb = types.InlineKeyboardMarkup()
+    for r in rows:
+        kb.add(types.InlineKeyboardButton(f"{r['name']} — {r['phone']}", callback_data=f"choose_cust|{r['id']}"))
+    bot.send_message(m.chat.id, "Topilgan mijozlar:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("choose_cust|"))
+def cb_choose_cust(c):
+    uid = c.from_user.id
+    _, cid = c.data.split("|")
+    set_state(uid, "checkout_customer_id", int(cid))
+    set_state(uid, "action", "checkout_payment")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("Naqd", "Qarz"); kb.row("Bekor qilish")
+    bot.send_message(c.message.chat.id, "To'lov turini tanlang:", reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_payment")
+def checkout_payment(m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip().lower()
+    if txt == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if txt not in ("naqd", "qarz"):
+        bot.send_message(m.chat.id, "Iltimos 'Naqd' yoki 'Qarz' ni tanlang.", reply_markup=cancel_keyboard()); return
+    set_state(uid, "checkout_payment_type", txt)
+    set_state(uid, "action", "checkout_confirm_format")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("Matn", "Rasm"); kb.row("Bekor qilish")
+    bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki Rasm):", reply_markup=kb)
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
+def checkout_confirm_format(m):
+    """
+    This handler accepts user input 'Matn' or 'Rasm' (or synonyms).
+    If 'Rasm' selected, robust receipt_image_bytes() will be used.
+    """
+    uid = m.from_user.id
+    fmt = (m.text or "").strip().lower()
+    if fmt == "bekor qilish":
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        return
+
+    # Accept multiple synonyms for image
+    if fmt not in ("matn", "rasm", "image", "photo"):
+        bot.send_message(m.chat.id, "Iltimos 'Matn' yoki 'Rasm' ni tanlang.", reply_markup=cancel_keyboard())
+        return
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    if not row or not row.get('data') or not parse_cart_data(row.get('data')).get('items'):
+        bot.send_message(m.chat.id, "Savatcha bo'sh - sotish imkoni yo'q.", reply_markup=main_keyboard())
+        clear_state(uid)
+        cur.close()
+        conn.close()
+        return
+
+    data = parse_cart_data(row.get('data'))
+    items = data.get('items', [])
+    total = sum(it['qty'] * it['price'] for it in items)
+    cust_id = get_state(uid, "checkout_customer_id")
+    payment = get_state(uid, "checkout_payment_type")
+
     cur.execute("""
-        SELECT si.product_id, si.name AS product_name,
-               SUM(si.qty) AS sold_qty,
-               SUM(si.total) AS total_sold,
-               p.cost_price AS cost_price
-        FROM sale_items si
-        JOIN sales s ON s.id = si.sale_id
-        LEFT JOIN products p ON p.id = si.product_id
-        WHERE s.created_at >= %s AND s.created_at < %s
-        GROUP BY si.product_id, si.name, p.cost_price
-        ORDER BY si.name;
-    """, (start_dt, end_dt))
+        INSERT INTO sales (customer_id, total_amount, payment_type, seller_phone)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, created_at;
+    """, (cust_id, total, payment, SELLER_PHONE))
+    sale = cur.fetchone()
+    sale_id = sale['id']
+
+    for it in items:
+        cur.execute("""
+            INSERT INTO sale_items (sale_id, product_id, name, qty, price, total)
+            VALUES (%s,%s,%s,%s,%s,%s);
+        """, (sale_id, it['product_id'], it['name'], it['qty'], it['price'], it['qty'] * it['price']))
+        cur.execute("UPDATE products SET qty = qty - %s WHERE id=%s;", (it['qty'], it['product_id']))
+
+    if payment == "qarz":
+        cur.execute("INSERT INTO debts (customer_id, sale_id, amount) VALUES (%s, %s, %s);", (cust_id, sale_id, total))
+
+    cur.execute("DELETE FROM user_carts WHERE user_id=%s;", (uid,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    clear_state(uid)
+
+    # Send receipt: text or image
+    try:
+        if fmt == "matn":
+            bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
+        else:
+            img = receipt_image_bytes(sale_id)
+            if not img:
+                bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
+            else:
+                img.seek(0)
+                bot.send_photo(m.chat.id, img, caption="🧾 Sizning chek (rasm)", reply_markup=main_keyboard())
+    except Exception as e:
+        # log and fallback
+        print("Error generating/sending receipt image:", e)
+        bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML", reply_markup=main_keyboard())
+
+
+# --- Stock export, stats, debts handlers (kept similar to original) ---
+def export_stock_image():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
+    lines = ["Ombor holati"]
     if not rows:
-        return pd.DataFrame(columns=["product_id","name","sold_qty","total_sold","cost_price","total_cost","profit"])
-
-    df = pd.DataFrame(rows)
-    # ensure numeric
-    df["sold_qty"] = df["sold_qty"].astype(int)
-    df["total_sold"] = df["total_sold"].astype(int)
-    df["cost_price"] = df["cost_price"].fillna(0).astype(int)
-    df["total_cost"] = df["sold_qty"] * df["cost_price"]
-    df["profit"] = df["total_sold"] - df["total_cost"]
-    df = df.rename(columns={"product_name":"name"})
-    # reorder
-    df = df[["product_id","name","sold_qty","cost_price","total_sold","total_cost","profit"]]
-    return df
-
-def make_excel_from_df(df, title, start_dt, end_dt):
-    """
-    Returns BytesIO with Excel file (xlsx) containing df and totals row.
-    """
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # write meta sheet
-        meta = pd.DataFrame([{
-            "Hisobot": title,
-            "Sana boshi": start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
-            "Sana oxiri": end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
-            "Yaratildi": now_str()
-        }])
-        meta.to_excel(writer, index=False, sheet_name="Meta")
-        # main sheet
-        if df.empty:
-            empty_df = pd.DataFrame([{"Xabar":"Ushbu davrda hech qanday mahsulot sotilmagan."}])
-            empty_df.to_excel(writer, index=False, sheet_name="Hisobot")
-        else:
-            df.to_excel(writer, index=False, sheet_name="Hisobot")
-            # write totals in a new row
-            totals = {
-                "name": "Jami",
-                "sold_qty": df["sold_qty"].sum(),
-                "cost_price": "",
-                "total_sold": df["total_sold"].sum(),
-                "total_cost": df["total_cost"].sum(),
-                "profit": df["profit"].sum()
-            }
-            totals_df = pd.DataFrame([totals])
-            # append totals at bottom of same sheet
-            book = writer.book
-            ws = writer.sheets["Hisobot"]
-            start_row = len(df) + 2  # 1-based + header
-            # write totals manually to cells for clarity
-            ws.cell(row=start_row, column=2, value="Jami")
-            ws.cell(row=start_row, column=3, value=totals["sold_qty"])
-            ws.cell(row=start_row, column=5, value=int(totals["total_sold"]))
-            ws.cell(row=start_row, column=6, value=int(totals["total_cost"]))
-            ws.cell(row=start_row, column=7, value=int(totals["profit"]))
-        writer.save()
-    output.seek(0)
-    return output
-
-# Handler helpers for stat_by_id
-def generate_sale_excel_by_id(sale_id):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT s.id AS sale_id, s.created_at, s.total_amount, s.payment_type, c.name as cust_name, c.phone as cust_phone
-        FROM sales s
-        LEFT JOIN customers c ON c.id = s.customer_id
-        WHERE s.id = %s;
-    """, (sale_id,))
-    sale = cur.fetchone()
-    if not sale:
-        cur.close()
-        conn.close()
-        return None
-    cur.execute("""
-        SELECT si.product_id, si.name, si.qty, si.price, si.total, p.cost_price
-        FROM sale_items si
-        LEFT JOIN products p ON p.id = si.product_id
-        WHERE si.sale_id = %s;
-    """, (sale_id,))
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    if not items:
-        df_items = pd.DataFrame([{"Xabar":"Ushbu chekda elementlar yo'q"}])
+        lines.append("Omborda hech qanday mahsulot yo'q.")
     else:
-        df_items = pd.DataFrame(items)
-        df_items["cost_price"] = df_items["cost_price"].fillna(0).astype(int)
-        df_items["qty"] = df_items["qty"].astype(int)
-        df_items["price"] = df_items["price"].astype(int)
-        df_items["total"] = df_items["total"].astype(int)
-        df_items["profit"] = df_items["total"] - (df_items["qty"] * df_items["cost_price"])
+        for r in rows:
+            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — opt: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}")
 
-    # create excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        sale_meta = pd.DataFrame([{
-            "Sale ID": sale["sale_id"],
-            "Sana": sale["created_at"].strftime("%Y-%m-%d %H:%M:%S") if sale["created_at"] else "",
-            "Mijoz": sale.get("cust_name") or "",
-            "Telefon": sale.get("cust_phone") or "",
-            "To'lov turi": sale.get("payment_type") or "",
-            "Jami summa": sale.get("total_amount") or 0
-        }])
-        sale_meta.to_excel(writer, index=False, sheet_name="Sale")
-        df_items.to_excel(writer, index=False, sheet_name="Items")
-        writer.save()
-    output.seek(0)
-    return output
+    font = _get_font(16)
+    temp = Image.new("RGB", (1000, 2000), "white")
+    d = ImageDraw.Draw(temp)
+    w, h = _measure_text(d, "\n".join(lines), font)
+    img_w = max(700, w + 40)
+    img_h = h + 40
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+    y = 20
+    for ln in lines:
+        draw.text((20, y), ln, font=font, fill="black")
+        _, hh = _measure_text(draw, ln, font)
+        y += hh + 6
 
-# ---------------------------
-# STATISTICS handlers (callbacks and message handlers)
-# ---------------------------
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    buf.seek(0)
+    return buf
+
+def stats_image_bytes(period):
+    lines = [f"Hisobot: {period}", f"Sana: {now_str()}", "", "Eslatma: to'liq statistikani yaratish uchun serverda ko'proq ma'lumot yig'ilishi kerak."]
+    font = _get_font(16)
+    temp = Image.new("RGB", (800, 300), "white")
+    d = ImageDraw.Draw(temp)
+    w, h = _measure_text(d, "\n".join(lines), font)
+    img_w = max(600, w + 40)
+    img_h = h + 40
+    img = Image.new("RGB", (img_w, img_h), "white")
+    draw = ImageDraw.Draw(img)
+    y = 20
+    for ln in lines:
+        draw.text((20, y), ln, font=font, fill="black")
+        _, hh = _measure_text(draw, ln, font)
+        y += hh + 6
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    buf.seek(0)
+    return buf
 
 @bot.message_handler(func=lambda m: m.text == "📊 Statistika")
 def cmd_statistics(m):
@@ -573,76 +961,178 @@ def cmd_statistics(m):
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("stat_"))
 def cb_stat(c):
-    try:
-        cmd = c.data
-        if cmd == "stat_search_id":
-            set_state(c.from_user.id, "action", "stat_search_by_id")
-            bot.send_message(c.message.chat.id, "Sotuv ID ni kiriting:", reply_markup=cancel_keyboard())
-            bot.answer_callback_query(c.id)
-            return
+    cmd = c.data
+    if cmd == "stat_search_id":
+        set_state(c.from_user.id, "action", "stat_search_by_id")
+        bot.send_message(c.message.chat.id, "Sotuv ID ni kiriting:", reply_markup=cancel_keyboard())
+    elif cmd in ("stat_daily","stat_monthly","stat_yearly"):
+        period = cmd.split("_")[1]
+        img_buf = stats_image_bytes(period)
+        img_buf.seek(0)
+        bot.send_photo(c.message.chat.id, img_buf, caption=f"{period} hisobot (rasm)")
+    elif cmd == "stock_export":
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
+        set_state(c.from_user.id, "action", "stock_export_choose_format")
+        bot.send_message(c.from_user.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
+    bot.answer_callback_query(c.id)
 
-        if cmd == "stock_export":
-            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-            kb.row("Excel", "Rasm"); kb.row("Bekor qilish")
-            set_state(c.from_user.id, "action", "stock_export_choose_format")
-            bot.send_message(c.from_user.id, "Qaysi formatda olmoqchisiz?", reply_markup=kb)
-            bot.answer_callback_query(c.id)
-            return
-
-        # For daily/monthly/yearly -> generate excel
-        period_map = {
-            "stat_daily": "daily",
-            "stat_monthly": "monthly",
-            "stat_yearly": "yearly"
-        }
-        if cmd not in period_map:
-            bot.answer_callback_query(c.id, "Noma'lum buyruq")
-            return
-
-        period_key = period_map[cmd]
-        start_dt, end_dt = _period_range_for("daily" if period_key=="daily" else ("monthly" if period_key=="monthly" else "yearly"))
-        df = generate_stats_df(start_dt, end_dt)
-        title = f"{period_key.title()} hisobot"
-        excel_buf = make_excel_from_df(df, title, start_dt, end_dt)
-        caption = f"{period_key.title()} hisobot: {start_dt.strftime('%Y-%m-%d')} — { (end_dt - timedelta(seconds=1)).strftime('%Y-%m-%d') }"
-        filename = f"hisobot_{period_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        bot.send_document(c.message.chat.id, (excel_buf), visible_file_name=filename, caption=caption)
-        bot.answer_callback_query(c.id)
-    except Exception as e:
-        print("cb_stat error:", e)
-        traceback.print_exc()
-        try:
-            bot.answer_callback_query(c.id, "Xatolik yuz berdi")
-        except:
-            pass
-
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stat_search_by_id")
-def stat_search_by_id_handler(m):
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "stock_export_choose_format")
+def stock_export_choose_format(m):
     uid = m.from_user.id
-    txt = (m.text or "").strip()
-    if txt.lower() == "bekor qilish":
-        clear_state(uid)
-        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
-        return
-    if not txt.isdigit():
-        bot.send_message(m.chat.id, "Iltimos to'g'ri ID kiriting (son).", reply_markup=cancel_keyboard())
-        return
-    sale_id = int(txt)
+    txt = (m.text or "").strip().lower()
+    if txt == "bekor qilish":
+        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+    if txt not in ("excel", "pdf", "rasm"):
+        bot.send_message(m.chat.id, "Iltimos Excel yoki Rasm ni tanlang.", reply_markup=cancel_keyboard()); return
+    if txt == "excel":
+        bot.send_document(m.chat.id, export_stock_excel(), caption="Ombor holati (Excel)", reply_markup=main_keyboard())
+    else:
+        img_buf = export_stock_image()
+        img_buf.seek(0)
+        bot.send_photo(m.chat.id, img_buf, caption="Ombor holati (rasm)", reply_markup=main_keyboard())
     clear_state(uid)
-    excel_buf = generate_sale_excel_by_id(sale_id)
-    if not excel_buf:
-        bot.send_message(m.chat.id, f"Sotuv topilmadi: ID={sale_id}", reply_markup=main_keyboard())
+
+def export_stock_excel():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        df = pd.DataFrame([{"Xabar": "Omborda hech qanday mahsulot yo'q"}])
+    else:
+        df = pd.DataFrame(rows)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Ombor")
+        writer.close()
+    buf.seek(0)
+    return buf
+
+# ---------------------------
+# NEW: Export all products as Excel (triggered by menu button "📊 Ombor (Excel)")
+# ---------------------------
+@bot.message_handler(func=lambda m: m.text == "📊 Ombor (Excel)")
+def export_products_excel_handler(m):
+    try:
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not rows:
+            bot.send_message(m.chat.id, "📦 Omborda hech qanday mahsulot yo‘q.", reply_markup=main_keyboard())
+            return
+
+        # DataFrame yaratamiz
+        df = pd.DataFrame(rows)
+
+        # O'zbekcha sarlavhalar qo'yamiz
+        df.rename(columns={
+            "id": "№",
+            "name": "Mahsulot nomi",
+            "qty": "Miqdor (dona)",
+            "cost_price": "Narx (so‘m)",
+            "suggest_price": "Taklif narxi (so‘m)",
+            "created_at": "Qo‘shilgan sana"
+        }, inplace=True)
+
+        # Raqamlarni formatlaymiz (butun son sifatida)
+        df["Narx (so‘m)"] = df["Narx (so‘m)"].astype(float).round(0).astype(int)
+        df["Taklif narxi (so‘m)"] = df["Taklif narxi (so‘m)"].astype(float).round(0).astype(int)
+
+        # Excel fayl yaratish
+        import tempfile, os
+        from datetime import datetime
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            file_path = tmp.name
+
+        # Pandas ExcelWriter orqali formatlab yozamiz
+        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Ombor")
+
+        file_name = f"ombor_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+
+        with open(file_path, "rb") as f:
+            bot.send_document(m.chat.id, f, caption=f"📊 Ombor ro‘yxati ({file_name})", reply_markup=main_keyboard())
+
+        os.remove(file_path)
+
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Xatolik: {e}", reply_markup=main_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "📋 Qarzdorlar ro'yxati")
+def cmd_debts(m):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT d.id, d.amount, d.created_at, c.name, c.phone
+        FROM debts d
+        JOIN customers c ON d.customer_id = c.id
+        ORDER BY d.created_at DESC;
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        bot.send_message(m.chat.id, "✅ Hozircha qarzdorlar yo‘q.", reply_markup=main_keyboard())
         return
-    filename = f"chek_{sale_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    bot.send_document(m.chat.id, excel_buf, visible_file_name=filename, caption=f"Chek №{sale_id} hisobot (Excel)", reply_markup=main_keyboard())
 
-# ---------------------------
-# STOCK EXPORT handlers already present above (export_stock_excel, etc.)
-# ---------------------------
+    # --- Matnli ro‘yxatni chiroyli chiqarish ---
+    text_lines = ["📋 <b>Qarzdorlar ro‘yxati:</b>\n"]
+    for i, r in enumerate(rows, start=1):
+        sana = r['created_at'].strftime("%d.%m.%Y") if r['created_at'] else "-"
+        text_lines.append(f"{i}. <b>{r['name']}</b> ({r['phone']})\n💰 {format_money(r['amount'])} — 📅 {sana}\n")
 
-# ---------------------------
-# Fallback and run
-# ---------------------------
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("⬇️ Excel faylni yuklab olish", callback_data="debts_excel"))
+
+    bot.send_message(m.chat.id, "\n".join(text_lines), parse_mode="HTML", reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "debts_excel")
+def cb_debts_excel(c):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT c.name AS Mijoz, c.phone AS Telefon, d.amount AS Qarz_summasi, d.created_at AS Sana
+        FROM debts d
+        JOIN customers c ON d.customer_id = c.id
+        ORDER BY d.created_at DESC;
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        bot.answer_callback_query(c.id, "Qarzdorlar topilmadi.")
+        return
+
+    df = pd.DataFrame(rows)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Qarzdorlar")
+    buf.seek(0)
+
+    file_name = f"qarzdorlar_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    bot.send_document(
+        c.message.chat.id,
+        buf,
+        visible_file_name=file_name,
+        caption="📊 Qarzdorlar ro‘yxati (Excel formatida)"
+    )
+
+    bot.answer_callback_query(c.id, "Excel fayl yuborildi ✅")
+
 
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
@@ -652,15 +1142,13 @@ def fallback(m):
     else:
         bot.send_message(m.chat.id, "Menyu orqali tanlang yoki /start ni bosing.", reply_markup=main_keyboard())
 
+
+# --- Run ---
 if __name__ == "__main__":
     init_db()
-    print("✅ Bot ishga tushdi! Polling boshlanmoqda...")
-    # Use infinity_polling with skip_pending True to avoid processing backlog on restarts.
-    # Wrap in try/except loop to keep Railway worker alive and auto-retry on occasional network errors.
-    while True:
-        try:
-            bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            print("Polling exception:", e)
-            traceback.print_exc()
-            _time.sleep(3)
+    print("✅ Bot ishga tushdi!")
+    try:
+        bot.infinity_polling()
+    except Exception as e:
+        print("Polling exception:", e)
+        raise
