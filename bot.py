@@ -394,6 +394,32 @@ def receipt_text(sale_id):
     lines.append("Tashrifingiz uchun rahmat! ❤️")
     return "\n".join(lines)
 # ---------------------------
+# --- Start handler ---
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    if message.from_user.id not in ALLOWED_USERS:
+        bot.send_message(message.chat.id, "❌ Sizga kirish taqiqlangan.")
+        return
+
+    text = (
+        "👋 Salom!\n\n"
+        "Bu do‘kon boshqaruv botidir.\n"
+        "Quyidagi menyudan tanlang 👇"
+    )
+    bot.send_message(message.chat.id, text, reply_markup=main_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "📊 Statistika")
+def show_stat_menu(message):
+    if message.from_user.id not in ALLOWED_USERS:
+        bot.send_message(message.chat.id, "❌ Sizga kirish taqiqlangan.")
+        return
+
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("📋 Chek ID bo‘yicha", "📅 Kunlik")
+    kb.row("🗓 Oylik", "📆 Yillik")
+    kb.row("⬅️ Orqaga")
+    bot.send_message(message.chat.id, "Statistika turini tanlang 👇", reply_markup=kb)
+
 # --- Run ---
 if __name__ == "__main__":
     init_db()
