@@ -1344,44 +1344,44 @@ def generate_stats_df(start_dt, end_dt):
     conn.close()
 
     if not rows:
-        return pd.DataFrame(columns=[\"product_id\",\"name\",\"sold_qty\",\"cost_price\",\"total_sold\",\"total_cost\",\"profit\"])
+        return pd.DataFrame(columns=["product_id","name","sold_qty","cost_price","total_sold","total_cost","profit"])
 
     df = pd.DataFrame(rows)
-    df = df.rename(columns={\"product_name\":\"name\"})
-    df[\"sold_qty\"] = df[\"sold_qty\"].astype(int)
-    df[\"total_sold\"] = df[\"total_sold\"].astype(int)
-    df[\"cost_price\"] = df[\"cost_price\"].astype(int)
-    df[\"total_cost\"] = df[\"sold_qty\"] * df[\"cost_price\"]
-    df[\"profit\"] = df[\"total_sold\"] - df[\"total_cost\"]
-    df = df[[\"product_id\",\"name\",\"sold_qty\",\"cost_price\",\"total_sold\",\"total_cost\",\"profit\"]]
+    df = df.rename(columns={"product_name":"name"})
+    df["sold_qty"] = df["sold_qty"].astype(int)
+    df["total_sold"] = df["total_sold"].astype(int)
+    df["cost_price"] = df["cost_price"].astype(int)
+    df["total_cost"] = df["sold_qty"] * df["cost_price"]
+    df["profit"] = df["total_sold"] - df["total_cost"]
+    df = df[["product_id","name","sold_qty","cost_price","total_sold","total_cost","profit"]]
     return df
 
 def make_excel_from_df(df, title, start_dt, end_dt):
     out = io.BytesIO()
-    with pd.ExcelWriter(out, engine=\"openpyxl\") as writer:
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
         meta = pd.DataFrame([{
-            \"Hisobot\": title,
-            \"Sana boshi\": start_dt.strftime(\"%Y-%m-%d %H:%M:%S\"),
-            \"Sana oxiri\": end_dt.strftime(\"%Y-%m-%d %H:%M:%S\"),
-            \"Yaratildi\": now_str()
+            "Hisobot": title,
+            "Sana boshi": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Sana oxiri": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Yaratildi": now_str()
         }])
-        meta.to_excel(writer, index=False, sheet_name=\"Meta\")
+        meta.to_excel(writer, index=False, sheet_name="Meta")
         if df.empty:
-            pd.DataFrame([{\"Xabar\":\"Ushbu davrda hech qanday mahsulot sotilmagan.\"}]).to_excel(writer, index=False, sheet_name=\"Hisobot\")
+            pd.DataFrame([{"Xabar":"Ushbu davrda hech qanday mahsulot sotilmagan."}]).to_excel(writer, index=False, sheet_name="Hisobot")
         else:
-            df.to_excel(writer, index=False, sheet_name=\"Hisobot\")
-            ws = writer.sheets[\"Hisobot\"]
+            df.to_excel(writer, index=False, sheet_name="Hisobot")
+            ws = writer.sheets["Hisobot"]
             start_row = len(df) + 3
-            ws.cell(row=start_row, column=2, value=\"Jami\")
-            ws.cell(row=start_row, column=3, value=int(df[\"sold_qty\"].sum()))
-            ws.cell(row=start_row, column=5, value=int(df[\"total_sold\"].sum()))
-            ws.cell(row=start_row, column=6, value=int(df[\"total_cost\"].sum()))
-            ws.cell(row=start_row, column=7, value=int(df[\"profit\"].sum()))
+            ws.cell(row=start_row, column=2, value="Jami")
+            ws.cell(row=start_row, column=3, value=int(df["sold_qty"].sum()))
+            ws.cell(row=start_row, column=5, value=int(df["total_sold"].sum()))
+            ws.cell(row=start_row, column=6, value=int(df["total_cost"].sum()))
+            ws.cell(row=start_row, column=7, value=int(df["profit"].sum()))
     out.seek(0)
     return out
 
 def daily_report_thread():
-    \"\"\"Thread that sends yesterday's report once every day at ~00:05 server time.\"\"\"
+    """Thread that sends yesterday's report once every day at ~00:05 server time."""
     # small initial delay to allow bot to start
     _time.sleep(5)
     while True:
