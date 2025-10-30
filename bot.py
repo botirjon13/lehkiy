@@ -1433,7 +1433,7 @@ if __name__ == "__main__":
     print("✅ Bot ishga tushdi!")
     try:
         start_daily_report_thread()
-    bot.infinity_polling()
+        bot.infinity_polling()
     except Exception as e:
         print("Polling exception:", e)
         raise
