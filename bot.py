@@ -1291,11 +1291,149 @@ def fallback(m):
 
 
 # --- Run ---
+
+
+# ------------------ ADDED: Statistics generation + daily auto-send ------------------
+import threading
+import time as _time
+from datetime import date, time as _timeobj
+
+def _period_range_for(period_key):
+    try:
+        tz = ZoneInfo(TIMEZONE)
+    except Exception:
+        tz = None
+    now = datetime.now(tz) if tz else datetime.utcnow() + timedelta(hours=5)
+    today = now.date()
+    if period_key == "daily":
+        start = datetime.combine(today, _timeobj.min)
+        end = start + timedelta(days=1)
+    elif period_key == "monthly":
+        start = datetime.combine(date(today.year, today.month, 1), _timeobj.min)
+        if today.month == 12:
+            end = datetime.combine(date(today.year+1, 1, 1), _timeobj.min)
+        else:
+            end = datetime.combine(date(today.year, today.month+1, 1), _timeobj.min)
+    elif period_key == "yearly":
+        start = datetime.combine(date(today.year, 1, 1), _timeobj.min)
+        end = datetime.combine(date(today.year+1, 1, 1), _timeobj.min)
+    else:
+        raise ValueError("Unknown period")
+    if tz:
+        start = start.replace(tzinfo=tz)
+        end = end.replace(tzinfo=tz)
+    return start, end
+
+def generate_stats_df(start_dt, end_dt):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute(\"\"\"
+        SELECT si.product_id, si.name AS product_name,
+               SUM(si.qty) AS sold_qty,
+               SUM(si.total) AS total_sold,
+               COALESCE(p.cost_price,0) AS cost_price
+        FROM sale_items si
+        JOIN sales s ON s.id = si.sale_id
+        LEFT JOIN products p ON p.id = si.product_id
+        WHERE s.created_at >= %s AND s.created_at < %s
+        GROUP BY si.product_id, si.name, p.cost_price
+        ORDER BY si.name;
+    \"\"\", (start_dt, end_dt))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        return pd.DataFrame(columns=[\"product_id\",\"name\",\"sold_qty\",\"cost_price\",\"total_sold\",\"total_cost\",\"profit\"])
+
+    df = pd.DataFrame(rows)
+    df = df.rename(columns={\"product_name\":\"name\"})
+    df[\"sold_qty\"] = df[\"sold_qty\"].astype(int)
+    df[\"total_sold\"] = df[\"total_sold\"].astype(int)
+    df[\"cost_price\"] = df[\"cost_price\"].astype(int)
+    df[\"total_cost\"] = df[\"sold_qty\"] * df[\"cost_price\"]
+    df[\"profit\"] = df[\"total_sold\"] - df[\"total_cost\"]
+    df = df[[\"product_id\",\"name\",\"sold_qty\",\"cost_price\",\"total_sold\",\"total_cost\",\"profit\"]]
+    return df
+
+def make_excel_from_df(df, title, start_dt, end_dt):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine=\"openpyxl\") as writer:
+        meta = pd.DataFrame([{
+            \"Hisobot\": title,
+            \"Sana boshi\": start_dt.strftime(\"%Y-%m-%d %H:%M:%S\"),
+            \"Sana oxiri\": end_dt.strftime(\"%Y-%m-%d %H:%M:%S\"),
+            \"Yaratildi\": now_str()
+        }])
+        meta.to_excel(writer, index=False, sheet_name=\"Meta\")
+        if df.empty:
+            pd.DataFrame([{\"Xabar\":\"Ushbu davrda hech qanday mahsulot sotilmagan.\"}]).to_excel(writer, index=False, sheet_name=\"Hisobot\")
+        else:
+            df.to_excel(writer, index=False, sheet_name=\"Hisobot\")
+            ws = writer.sheets[\"Hisobot\"]
+            start_row = len(df) + 3
+            ws.cell(row=start_row, column=2, value=\"Jami\")
+            ws.cell(row=start_row, column=3, value=int(df[\"sold_qty\"].sum()))
+            ws.cell(row=start_row, column=5, value=int(df[\"total_sold\"].sum()))
+            ws.cell(row=start_row, column=6, value=int(df[\"total_cost\"].sum()))
+            ws.cell(row=start_row, column=7, value=int(df[\"profit\"].sum()))
+    out.seek(0)
+    return out
+
+def daily_report_thread():
+    \"\"\"Thread that sends yesterday's report once every day at ~00:05 server time.\"\"\"
+    # small initial delay to allow bot to start
+    _time.sleep(5)
+    while True:
+        try:
+            # compute yesterday range
+            tz = None
+            try:
+                tz = ZoneInfo(TIMEZONE)
+            except:
+                tz = None
+            nowz = datetime.now(tz) if tz else datetime.utcnow() + timedelta(hours=5)
+            yesterday = (nowz.date() - timedelta(days=1))
+            start = datetime.combine(yesterday, _timeobj.min)
+            end = start + timedelta(days=1)
+            if tz:
+                start = start.replace(tzinfo=tz)
+                end = end.replace(tzinfo=tz)
+            df = generate_stats_df(start, end)
+            title = f\"Daily automated report for {start.strftime('%Y-%m-%d')}\"
+            buf = make_excel_from_df(df, title, start, end)
+            filename = f\"auto_report_{start.strftime('%Y%m%d')}.xlsx\"
+            # send to allowed users
+            for admin_id in ALLOWED_USERS:
+                try:
+                    buf.seek(0)
+                    bot.send_document(admin_id, buf, visible_file_name=filename, caption=f\"Avtomatik kunlik hisobot: {start.strftime('%Y-%m-%d')}\")
+                except Exception:
+                    # individual failure should not stop others
+                    pass
+            # sleep until next day ~00:05 (calculate seconds)
+            nowz = datetime.now(tz) if tz else datetime.utcnow() + timedelta(hours=5)
+            next_run = datetime.combine(nowz.date() + timedelta(days=1), _timeobj(hour=0, minute=5))
+            if tz:
+                next_run = next_run.replace(tzinfo=tz)
+            sleep_seconds = max(60, (next_run - nowz).total_seconds())
+            _time.sleep(sleep_seconds)
+        except Exception:
+            # avoid thread death
+            _time.sleep(60)
+
+# helper to start thread; will be called in __main__
+def start_daily_report_thread():
+    t = threading.Thread(target=daily_report_thread, daemon=True)
+    t.start()
+
+# ------------------ END ADDED BLOCK ------------------
 if __name__ == "__main__":
     init_db()
     print("✅ Bot ishga tushdi!")
     try:
-        bot.infinity_polling()
+        start_daily_report_thread()
+    bot.infinity_polling()
     except Exception as e:
         print("Polling exception:", e)
         raise
