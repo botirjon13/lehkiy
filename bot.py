@@ -1338,7 +1338,7 @@ def generate_stats_df(start_dt, end_dt):
         WHERE s.created_at >= %s AND s.created_at < %s
         GROUP BY si.product_id, si.name, p.cost_price
         ORDER BY si.name;
-    \"\"\", (start_dt, end_dt))
+    """, (start_dt, end_dt))
     rows = cur.fetchall()
     cur.close()
     conn.close()
