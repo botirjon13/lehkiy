@@ -1327,7 +1327,7 @@ def _period_range_for(period_key):
 def generate_stats_df(start_dt, end_dt):
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute(\"\"\"
+    cur.execute("""
         SELECT si.product_id, si.name AS product_name,
                SUM(si.qty) AS sold_qty,
                SUM(si.total) AS total_sold,
