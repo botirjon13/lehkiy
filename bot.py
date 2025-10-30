@@ -1400,7 +1400,7 @@ def daily_report_thread():
                 start = start.replace(tzinfo=tz)
                 end = end.replace(tzinfo=tz)
             df = generate_stats_df(start, end)
-            title = f\"Daily automated report for {start.strftime('%Y-%m-%d')}\"
+            title = f"Daily automated report for {start.strftime('%Y-%m-%d')}"
             buf = make_excel_from_df(df, title, start, end)
             filename = f\"auto_report_{start.strftime('%Y%m%d')}.xlsx\"
             # send to allowed users
