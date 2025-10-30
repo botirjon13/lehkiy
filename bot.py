@@ -1402,12 +1402,12 @@ def daily_report_thread():
             df = generate_stats_df(start, end)
             title = f"Daily automated report for {start.strftime('%Y-%m-%d')}"
             buf = make_excel_from_df(df, title, start, end)
-            filename = f\"auto_report_{start.strftime('%Y%m%d')}.xlsx\"
+            filename = f"auto_report_{start.strftime('%Y%m%d')}.xlsx"
             # send to allowed users
             for admin_id in ALLOWED_USERS:
                 try:
                     buf.seek(0)
-                    bot.send_document(admin_id, buf, visible_file_name=filename, caption=f\"Avtomatik kunlik hisobot: {start.strftime('%Y-%m-%d')}\")
+                    bot.send_document(admin_id, buf, visible_file_name=filename, caption=f"Avtomatik kunlik hisobot: {start.strftime('%Y-%m-%d')}")
                 except Exception:
                     # individual failure should not stop others
                     pass
