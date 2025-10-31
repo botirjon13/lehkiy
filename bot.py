@@ -507,7 +507,7 @@ def sell_search(m):
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE name ILIKE %s ORDER BY id;", (f"%{txt}%",))
+    cur.execute("SELECT id, name, qty, suggest_price FROM products WHERE name ILIKE %s AND qty > 0 ORDER BY id;", (f"%{txt}%",))
     rows = cur.fetchall()
     cur.close()
     conn.close()
