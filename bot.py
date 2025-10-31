@@ -417,75 +417,219 @@ def cmd_start(m):
 
 
 # --- Add product ---
+# --- BEGIN: Excel / Manual product add handlers (INSERT or REPLACE existing start_add_product) ---
+
 @bot.message_handler(func=lambda m: m.text == "🔹 Yangi mahsulot qo'shish")
-def start_add_product(m):
+def start_add_product_menu(m):
+    """
+    Yangi mahsulot qo'shish — menyu:
+    - Qo'lda (avvalgi oqimga ulanadi)
+    - Excel orqali (fayl qabul qilib, ommaviy yuklash)
+    """
     uid = m.from_user.id
-    clear_state(uid)
-    set_state(uid, "action", "add_product_name")
-    bot.send_message(m.chat.id, "Mahsulot nomini kiriting (lotin harflarda):", reply_markup=cancel_keyboard())
+    # menyu: inline tugmalar
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("✏️ Qo'lda", callback_data="addprod_manual"))
+    kb.add(types.InlineKeyboardButton("📥 Excel orqali yuklash", callback_data="addprod_excel"))
+    kb.add(types.InlineKeyboardButton("Bekor qilish", callback_data="cancel"))
+    try:
+        bot.send_message(m.chat.id, "Mahsulot qo'shish usulini tanlang:", reply_markup=kb)
+    except:
+        bot.send_message(uid, "Mahsulot qo'shish usulini tanlang:", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_name")
-def add_product_name(m):
-    uid = m.from_user.id
-    text = (m.text or "").strip()
-    if text.lower() == "bekor qilish":
+
+@bot.callback_query_handler(func=lambda c: c.data in ("addprod_manual","addprod_excel","cancel"))
+def cb_addprod_menu(c):
+    uid = c.from_user.id
+    if c.data == "addprod_manual":
+        # QOLDI: mavjud qo'lda oqimni ishga tushuramiz:
         clear_state(uid)
-        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        set_state(uid, "action", "add_product_name")
+        try:
+            bot.edit_message_text("Mahsulot nomini kiriting (lotin harflarda):", chat_id=c.message.chat.id, message_id=c.message.message_id)
+        except:
+            bot.send_message(uid, "Mahsulot nomini kiriting (lotin harflarda):", reply_markup=cancel_keyboard())
+        bot.answer_callback_query(c.id)
         return
-    if contains_cyrillic(text):
-        bot.send_message(m.chat.id, "Iltimos faqat lotin alifbosida kiriting.", reply_markup=cancel_keyboard())
+
+    if c.data == "addprod_excel":
+        # Kutamiz: foydalanuvchidan .xlsx fayl kutiladi
+        clear_state(uid)
+        set_state(uid, "action", "add_product_excel_wait")
+        try:
+            bot.edit_message_text("Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo'lishi mumkin: name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+        except:
+            bot.send_message(uid, "Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo'lishi mumkin: name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx.", reply_markup=cancel_keyboard())
+        bot.answer_callback_query(c.id)
         return
-    set_state(uid, "new_product_name", text)
-    set_state(uid, "action", "add_product_qty")
-    bot.send_message(m.chat.id, "Mahsulot miqdorini son bilan kiriting (masalan: 100):", reply_markup=cancel_keyboard())
 
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_qty")
-def add_product_qty(m):
-    uid = m.from_user.id
-    txt = (m.text or "").strip()
-    if txt.lower() == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if not txt.isdigit():
-        bot.send_message(m.chat.id, "Iltimos butun son kiriting (masalan: 50).", reply_markup=cancel_keyboard()); return
-    set_state(uid, "new_product_qty", int(txt))
-    set_state(uid, "action", "add_product_cost")
-    bot.send_message(m.chat.id, "Optovikdan olingan narxini kiriting (so'm):", reply_markup=cancel_keyboard())
-
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_cost")
-def add_product_cost(m):
-    uid = m.from_user.id
-    txt = (m.text or "").strip().replace(" ", "").replace(",", "")
-    if txt.lower() == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if not txt.isdigit():
-        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 120000).", reply_markup=cancel_keyboard()); return
-    set_state(uid, "new_product_cost", int(txt))
-    set_state(uid, "action", "add_product_suggest")
-    bot.send_message(m.chat.id, "Taxminiy sotish narxini kiriting (so'm). Sotish vaqtida o'zgartirish mumkin:", reply_markup=cancel_keyboard())
-
-@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_suggest")
-def add_product_suggest(m):
-    uid = m.from_user.id
-    txt = (m.text or "").strip().replace(" ", "").replace(",", "")
-    if txt.lower() == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
-    if not txt.isdigit():
-        bot.send_message(m.chat.id, "Iltimos raqam kiriting (masalan: 150000).", reply_markup=cancel_keyboard()); return
-    name = get_state(uid, "new_product_name")
-    qty = get_state(uid, "new_product_qty")
-    cost = get_state(uid, "new_product_cost")
-    suggest = int(txt)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s) RETURNING id;",
-                (name, qty, cost, suggest))
-    pid = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    conn.close()
+    # cancel
+    try:
+        bot.edit_message_text("Amal bekor qilindi.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+    except:
+        bot.send_message(uid, "Amal bekor qilindi.", reply_markup=main_keyboard())
     clear_state(uid)
-    bot.send_message(m.chat.id, f"✅ Mahsulot qo'shildi: <b>{name}</b>\nID: {pid}\nMiqdor: {qty}\nNarx (opt): {format_money(cost)}\nTaklifiy: {format_money(suggest)}",
-                     reply_markup=main_keyboard())
+    bot.answer_callback_query(c.id)
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_excel_wait", content_types=['document'])
+def handle_excel_upload(m):
+    """
+    Excel fayl qabul qilinganda ishlaydi.
+    - Faylni yuklab oladi
+    - pandas bilan o'qiydi
+    - ustunlarni xaritalaydi (ing/uzb variantlarini qabul qiladi)
+    - har bir qatorni qayta ishlaydi: agar name & cost_price mos bo'lsa -> qty +=, aks holda -> yangi product
+    - natijani userga yuboradi
+    """
+    uid = m.from_user.id
+    doc = m.document
+    # tekshiruv: fayl turi xlsx bo'lsa davom etamiz
+    if not doc or not (doc.mime_type in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream") or doc.file_name.lower().endswith((".xlsx", ".xls"))):
+        bot.send_message(m.chat.id, "Iltimos .xlsx fayl yuboring.", reply_markup=cancel_keyboard())
+        return
+
+    bot.send_message(m.chat.id, "Fayl qabul qilindi, qayta ishlanmoqda... Iltimos kuting.")
+    try:
+        # yuklab olish
+        file_info = bot.get_file(doc.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        xbuf = io.BytesIO(downloaded)
+        # pandas bilan o'qish
+        try:
+            df = pd.read_excel(xbuf, engine="openpyxl")
+        except Exception as e:
+            # qayta urinib ko'rish (xlrd)?
+            try:
+                df = pd.read_excel(xbuf)
+            except Exception as e2:
+                bot.send_message(m.chat.id, f"Excel faylni o'qib bo'lmadi: {e}.", reply_markup=main_keyboard())
+                clear_state(uid)
+                return
+
+        # Ustun nomlarini kichik harfga o'tkazish va strip qilish
+        orig_cols = list(df.columns)
+        cols_map = {c: c.strip().lower() for c in orig_cols}
+
+        df.rename(columns={k: cols_map[k] for k in cols_map}, inplace=True)
+
+        # Potentsial nom variantlari
+        name_keys = ["name","nom","product","product_name","mahсулот","mahsol","mahsulot nomi"]
+        qty_keys = ["qty","quantity","soni","qty (dona)","miqdor","son"]
+        cost_keys = ["cost_price","cost","opt_narx","opt_price","narx","costprice"]
+        suggest_keys = ["suggest_price","sell_price","price","sotuv_narx","taklif_price","taklifnarx"]
+
+        # topish funksiyasi
+        def find_col(keys):
+            for k in keys:
+                if k in df.columns:
+                    return k
+            return None
+
+        col_name = find_col(name_keys)
+        col_qty = find_col(qty_keys)
+        col_cost = find_col(cost_keys)
+        col_suggest = find_col(suggest_keys)
+
+        if not col_name:
+            bot.send_message(m.chat.id, "Excel faylda mahsulot nomi topilmadi. Iltimos 'name' yoki 'nom' ustunli fayl yuboring.", reply_markup=main_keyboard())
+            clear_state(uid); return
+        if not col_qty:
+            bot.send_message(m.chat.id, "Excel faylda miqdor (qty/soni) ustuni topilmadi.", reply_markup=main_keyboard())
+            clear_state(uid); return
+        if not col_cost:
+            bot.send_message(m.chat.id, "Excel faylda optovik narx (cost_price) ustuni topilmadi.", reply_markup=main_keyboard())
+            clear_state(uid); return
+
+        # tozalash va turlarga o'tkazish
+        df = df[[col_name, col_qty, col_cost] + ([col_suggest] if col_suggest else [])].copy()
+        df = df.dropna(subset=[col_name])
+        df[col_name] = df[col_name].astype(str).str.strip()
+        # qty -> int
+        def to_int_safe(x):
+            try:
+                if pd.isna(x):
+                    return 0
+                if isinstance(x, str):
+                    x = x.replace(",", "").strip()
+                return int(float(x))
+            except:
+                return 0
+        df[col_qty] = df[col_qty].apply(to_int_safe)
+        df[col_cost] = df[col_cost].apply(to_int_safe)
+        if col_suggest:
+            df[col_suggest] = df[col_suggest].apply(to_int_safe)
+        else:
+            df["suggest_temp"] = 0
+            col_suggest = "suggest_temp"
+
+        # qayta ishlash: DB ga kiritish
+        conn = get_conn()
+        cur = conn.cursor()
+        inserted = 0
+        updated = 0
+        skipped = 0
+        errors = []
+
+        for idx, row in df.iterrows():
+            pname = (row[col_name] or "").strip()
+            pqty = int(row[col_qty] or 0)
+            pcost = int(row[col_cost] or 0)
+            psuggest = int(row[col_suggest] or 0)
+
+            if not pname or pqty <= 0:
+                skipped += 1
+                continue
+
+            # 1) Agar name va cost_price bir xil bo'lsa -> qty +=
+            try:
+                cur.execute("SELECT id, qty FROM products WHERE name ILIKE %s AND cost_price = %s LIMIT 1;", (pname, pcost))
+                existing = cur.fetchone()
+                if existing:
+                    prod_id = existing[0]
+                    cur.execute("UPDATE products SET qty = qty + %s, suggest_price = COALESCE(%s, suggest_price) WHERE id=%s;", (pqty, psuggest if psuggest>0 else None, prod_id))
+                    updated += 1
+                else:
+                    # yangi yozuv
+                    cur.execute("INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s);", (pname, pqty, pcost, psuggest if psuggest>0 else None))
+                    inserted += 1
+            except Exception as e:
+                errors.append(f"Qator {idx+2}: {e}")  # +2 (header+0)
+                continue
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # natija haqida xabar
+        summary_lines = [
+            "✅ Excel yuklash tugadi.",
+            f"📥 Yangi qo'shilganlar: {inserted}",
+            f"🔁 Mavjudlarga qo'shilganlar (qty yangilandi): {updated}",
+            f"⏭️ O'tkazib yuborilgan (nom yoki qty noto'g'ri): {skipped}",
+        ]
+        if errors:
+            summary_lines.append("\n⚠️ Ba'zi xatolar:")
+            for e in errors[:10]:
+                summary_lines.append(e)
+            if len(errors) > 10:
+                summary_lines.append(f"... va yana {len(errors)-10} ta xato.")
+
+        bot.send_message(m.chat.id, "\n".join(summary_lines), reply_markup=main_keyboard())
+
+    except Exception as e:
+        traceback.print_exc()
+        bot.send_message(m.chat.id, f"Xatolik yuz berdi: {e}", reply_markup=main_keyboard())
+    finally:
+        clear_state(uid)
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_excel_wait", content_types=['text','photo','audio','video','voice','sticker'])
+def handle_excel_wrong_type(m):
+    # foydalanuvchi fayl o'rniga boshqa narsani yuborgan bo'lsa
+    bot.send_message(m.chat.id, "Iltimos .xlsx formatidagi Excel fayl yuboring yoki 'Bekor qilish' tugmasi bilan chiqib keting.", reply_markup=cancel_keyboard())
+
+# --- END: Excel / Manual product add handlers ---
 
 # --- Search & Sell ---
 @bot.message_handler(func=lambda m: m.text and (m.text.strip().lower() == "🛒 mahsulot sotish" or ("mahsulot" in m.text.lower() and "sot" in m.text.lower())))
