@@ -516,8 +516,10 @@ def handle_excel_upload(m):
         # Potentsial nom variantlari
         name_keys = ["name","nom","product","product_name","mahсулот","mahsol","mahsulot nomi"]
         qty_keys = ["qty","quantity","soni","qty (dona)","miqdor","son"]
-        cost_keys = ["cost_price","cost","opt_narx","opt_price","narx","costprice"]
-        suggest_keys = ["suggest_price","sell_price","price","sotuv_narx","taklif_price","taklifnarx"]
+        cost_keys = ["cost_price","cost","opt_narx","opt narx","optprice","optovik narxi",
+    "optovik_narxi","optovik","optoviknarx","opt_narxi","opt_narx "]
+        suggest_keys = ["suggest_price","sell_price","price","sotuv_narx","sotuv narx","sotish narxi",
+    "sotish_narxi","taklif_price","taklifnarx","taklif narx","sotuvnarxi"]
 
         # topish funksiyasi
         def find_col(keys):
