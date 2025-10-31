@@ -949,6 +949,53 @@ def stats_image_bytes(period):
     img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf
+    #------yangisi ombor-----
+
+# 📦 Ombor bo‘limi (filtr bilan)
+@bot.message_handler(func=lambda msg: msg.text == "📦 Ombor")
+def show_inventory_menu(msg):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("📦 Faqat mavjudlar", "📦 Barchasi")
+    markup.row("⬅️ Orqaga")
+    bot.send_message(msg.chat.id, "Qaysi mahsulotlarni ko‘rmoqchisiz?", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda msg: msg.text == "📦 Faqat mavjudlar")
+def show_available_products(msg):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT name, qty, cost_price, suggest_price FROM products WHERE qty > 0 ORDER BY name;")
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        bot.send_message(msg.chat.id, "Hozircha mavjud mahsulotlar yo‘q.")
+        return
+
+    text = "📦 *Mavjud mahsulotlar:*\n\n"
+    for r in rows:
+        text += f"🔹 {r[0]} — {r[1]} dona | opt: {r[2]} so‘m | sot: {r[3]} so‘m\n"
+    bot.send_message(msg.chat.id, text, parse_mode="Markdown")
+
+
+@bot.message_handler(func=lambda msg: msg.text == "📦 Barchasi")
+def show_all_products(msg):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT name, qty, cost_price, suggest_price FROM products ORDER BY name;")
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        bot.send_message(msg.chat.id, "Bazaga hali mahsulot kiritilmagan.")
+        return
+
+    text = "📦 *Barcha mahsulotlar:*\n\n"
+    for r in rows:
+        status = "🟢 Mavjud" if r[1] > 0 else "🔴 Tugagan"
+        text += f"{status} {r[0]} — {r[1]} dona | opt: {r[2]} so‘m | sot: {r[3]} so‘m\n"
+    bot.send_message(msg.chat.id, text, parse_mode="Markdown")
+#------tugashi-----
 
 @bot.message_handler(func=lambda m: m.text == "📊 Statistika")
 def cmd_statistics(m):
