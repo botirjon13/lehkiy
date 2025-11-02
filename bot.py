@@ -170,7 +170,7 @@ def save_user_cart(uid, data):
 
 
 # Allowed users (preserve original)
-ALLOWED_USERS = [1262207928, 298157746]
+ALLOWED_USERS = [1262207928, 963690743, 8450201406]
 
 
 # ---------------------------
