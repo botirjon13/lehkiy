@@ -1046,7 +1046,7 @@ def checkout_payment(m):
         # Agar rasm yuborolmasa, kamida matnli chek bor bo'ladi (yuqorida yuborilgan bo'lsa)
 
     # Tugatib asosiy menyu qaytaramiz
-    bot.send_message(m.chat.id, "Savdo muvaffaqiyatli amalga oshirildi. Asosiy menyu:", reply_markup=main_keyboard())
+    bot.send_message(m.chat.id, "Savdo muvaffaqiyatli amalga oshirildi.✅✅✅", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
 def checkout_confirm_format(m):
