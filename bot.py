@@ -952,18 +952,101 @@ def cb_choose_cust(c):
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_payment")
 def checkout_payment(m):
+    """
+    Yangi oqim: foydalanuvchidan 'Naqd' yoki 'Qarz' olinadi,
+    so'ng formatni so'ramasdan darhol sotuv yaratiladi va
+    HAM matnli, HAM rasmli cheklar avtomatik yuboriladi.
+    """
     uid = m.from_user.id
     txt = (m.text or "").strip().lower()
     if txt == "bekor qilish":
-        clear_state(uid); bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard()); return
+        clear_state(uid)
+        bot.send_message(m.chat.id, "Amal bekor qilindi.", reply_markup=main_keyboard())
+        return
     if txt not in ("naqd", "qarz"):
-        bot.send_message(m.chat.id, "Iltimos 'Naqd' yoki 'Qarz' ni tanlang.", reply_markup=cancel_keyboard()); return
-    set_state(uid, "checkout_payment_type", txt)
-    set_state(uid, "action", "checkout_confirm_format")
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    kb.row("Matn", "Rasm"); kb.row("Bekor qilish")
-    bot.send_message(m.chat.id, "Chekni qaysi ko'rinishda olasiz? (Matn yoki Rasm):", reply_markup=kb)
+        bot.send_message(m.chat.id, "Iltimos 'Naqd' yoki 'Qarz' ni tanlang.", reply_markup=cancel_keyboard())
+        return
 
+    # Saqlaymiz
+    set_state(uid, "checkout_payment_type", txt)
+
+    # --- Yuklangan savatchani tekshirish ---
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT data FROM user_carts WHERE user_id=%s;", (uid,))
+    row = cur.fetchone()
+    if not row or not row.get('data') or not parse_cart_data(row.get('data')).get('items'):
+        bot.send_message(m.chat.id, "Savatcha bo'sh - sotish imkoni yo'q.", reply_markup=main_keyboard())
+        clear_state(uid)
+        cur.close()
+        conn.close()
+        return
+
+    data = parse_cart_data(row.get('data'))
+    items = data.get('items', [])
+    total = sum(it['qty'] * it['price'] for it in items)
+    cust_id = get_state(uid, "checkout_customer_id")
+    payment = txt
+
+    try:
+        # --- Sotuvni yaratish ---
+        cur.execute("""
+            INSERT INTO sales (customer_id, total_amount, payment_type, seller_phone)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, created_at;
+        """, (cust_id, total, payment, SELLER_PHONE))
+        sale = cur.fetchone()
+        sale_id = sale['id']
+
+        for it in items:
+            cur.execute("""
+                INSERT INTO sale_items (sale_id, product_id, name, qty, price, total)
+                VALUES (%s,%s,%s,%s,%s,%s);
+            """, (sale_id, it['product_id'], it['name'], it['qty'], it['price'], it['qty'] * it['price']))
+            cur.execute("UPDATE products SET qty = qty - %s WHERE id=%s;", (it['qty'], it['product_id']))
+
+        if payment == "qarz":
+            cur.execute("INSERT INTO debts (customer_id, sale_id, amount) VALUES (%s, %s, %s);", (cust_id, sale_id, total))
+
+        # Savatchani o'chiramiz
+        cur.execute("DELETE FROM user_carts WHERE user_id=%s;", (uid,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        traceback.print_exc()
+        bot.send_message(m.chat.id, f"Xatolik: {e}", reply_markup=main_keyboard())
+        clear_state(uid)
+        cur.close()
+        conn.close()
+        return
+    finally:
+        try:
+            cur.close()
+            conn.close()
+        except:
+            pass
+
+    clear_state(uid)
+
+    # --- Endi HAM matnli, HAM rasmli cheklarni yuboramiz ---
+    try:
+        # 1) Matnli chek
+        bot.send_message(m.chat.id, receipt_text(sale_id), parse_mode="HTML")
+    except Exception as e:
+        print("Matnli chek yuborishda xato:", e)
+
+    try:
+        # 2) Rasmli chek
+        img = receipt_image_bytes(sale_id)
+        if img:
+            img.seek(0)
+            bot.send_photo(m.chat.id, img, caption="🧾 Sizning chek (rasm)")
+    except Exception as e:
+        print("Rasmli chek yuborishda xato:", e)
+        # Agar rasm yuborolmasa, kamida matnli chek bor bo'ladi (yuqorida yuborilgan bo'lsa)
+
+    # Tugatib asosiy menyu qaytaramiz
+    bot.send_message(m.chat.id, "Savdo muvaffaqiyatli amalga oshirildi. Asosiy menyu:", reply_markup=main_keyboard())
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "checkout_confirm_format")
 def checkout_confirm_format(m):
