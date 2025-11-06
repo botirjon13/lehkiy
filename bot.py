@@ -436,7 +436,66 @@ def start_add_product_menu(m):
         bot.send_message(m.chat.id, "Mahsulot qo'shish usulini tanlang:", reply_markup=kb)
     except:
         bot.send_message(uid, "Mahsulot qo'shish usulini tanlang:", reply_markup=kb)
+        
+@bot.message_handler(func=lambda m: m.text == "➕ Qo‘lda kiritish")
+def manual_add_product(message):
+    bot.send_message(message.chat.id, "Mahsulot nomini kiriting:")
+    bot.register_next_step_handler(message, process_product_name)
 
+def process_product_name(message):
+    name = message.text.strip()
+    if not name:
+        bot.send_message(message.chat.id, "❌ Noto‘g‘ri nom. Qaytadan kiriting.")
+        return manual_add_product(message)
+    bot.send_message(message.chat.id, "Mahsulot miqdorini kiriting (dona):")
+    bot.register_next_step_handler(message, process_product_qty, name)
+
+def process_product_qty(message, name):
+    try:
+        qty = int(message.text.strip())
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Iltimos, faqat son kiriting.")
+        return bot.register_next_step_handler(message, process_product_qty, name)
+    bot.send_message(message.chat.id, "Optovik (olingan) narxini kiriting (so‘mda):")
+    bot.register_next_step_handler(message, process_product_cost, name, qty)
+
+def process_product_cost(message, name, qty):
+    try:
+        cost_price = int(message.text.strip())
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Faqat son kiriting.")
+        return bot.register_next_step_handler(message, process_product_cost, name, qty)
+    bot.send_message(message.chat.id, "Sotuv narxini kiriting (so‘mda):")
+    bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price)
+
+def save_product_to_db(message, name, qty, cost_price):
+    try:
+        suggest_price = int(message.text.strip())
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Faqat son kiriting.")
+        return bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price)
+
+    conn = connect_db()
+    cur = conn.cursor()
+
+    # Shu nom va opt_narxdagi mahsulot bormi?
+    cur.execute("SELECT id, qty FROM products WHERE name = %s AND cost_price = %s;", (name, cost_price))
+    existing = cur.fetchone()
+
+    if existing:
+        new_qty = existing[1] + qty
+        cur.execute("UPDATE products SET qty = %s WHERE id = %s;", (new_qty, existing[0]))
+        conn.commit()
+        bot.send_message(message.chat.id, f"🔁 Mahsulot yangilandi:\n{name} | {new_qty} dona | {cost_price} so‘m (optovik)")
+    else:
+        cur.execute(
+            "INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s);",
+            (name, qty, cost_price, suggest_price)
+        )
+        conn.commit()
+        bot.send_message(message.chat.id, f"✅ Yangi mahsulot qo‘shildi:\n{name} | {qty} dona | {cost_price} so‘m (optovik) | {suggest_price} so‘m (sotuv)")
+    cur.close()
+    conn.close()
 
 @bot.callback_query_handler(func=lambda c: c.data in ("addprod_manual","addprod_excel","cancel"))
 def cb_addprod_menu(c):
