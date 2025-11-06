@@ -475,7 +475,7 @@ def save_product_to_db(message, name, qty, cost_price):
         bot.send_message(message.chat.id, "❌ Faqat son kiriting.")
         return bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price)
 
-    conn = connect_db()
+    conn = get_conn()
     cur = conn.cursor()
 
     # Shu nom va opt_narxdagi mahsulot bormi?
