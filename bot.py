@@ -497,39 +497,58 @@ def save_product_to_db(message, name, qty, cost_price):
     cur.close()
     conn.close()
 
-@bot.callback_query_handler(func=lambda c: c.data in ("addprod_manual","addprod_excel","cancel"))
+@bot.callback_query_handler(func=lambda c: c.data in ("addprod_manual", "addprod_excel", "cancel"))
 def cb_addprod_menu(c):
     uid = c.from_user.id
+
     if c.data == "addprod_manual":
-        # QOLDI: mavjud qo'lda oqimni ishga tushuramiz:
+        # Qo‘lda mahsulot kiritish oqimi
         clear_state(uid)
-        set_state(uid, "action", "add_product_name")
+        set_state(uid, "action", "add_product_manual")
+
         try:
-            bot.edit_message_text("Mahsulot nomini kiriting (lotin harflarda):", chat_id=c.message.chat.id, message_id=c.message.message_id)
+            bot.edit_message_text(
+                "Mahsulot nomini kiriting (lotin harflarda):",
+                chat_id=c.message.chat.id,
+                message_id=c.message.message_id
+            )
         except:
-            bot.send_message(uid, "Mahsulot nomini kiriting (lotin harflarda):", reply_markup=cancel_keyboard())
+            bot.send_message(uid, "Mahsulot nomini kiriting (lotin harflarda):")
+
+        # 🔥 Shu qator juda muhim — foydalanuvchi javob berganda `process_product_name()` chaqiriladi
+        bot.register_next_step_handler(c.message, process_product_name)
+
         bot.answer_callback_query(c.id)
         return
 
     if c.data == "addprod_excel":
-        # Kutamiz: foydalanuvchidan .xlsx fayl kutiladi
+        # Excel yuklash oqimi
         clear_state(uid)
         set_state(uid, "action", "add_product_excel_wait")
         try:
-            bot.edit_message_text("Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo'lishi mumkin: name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx.", chat_id=c.message.chat.id, message_id=c.message.message_id)
+            bot.edit_message_text(
+                "Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo‘lishi mumkin:\n"
+                "name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx.",
+                chat_id=c.message.chat.id,
+                message_id=c.message.message_id
+            )
         except:
-            bot.send_message(uid, "Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo'lishi mumkin: name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx.", reply_markup=cancel_keyboard())
+            bot.send_message(
+                uid,
+                "Iltimos Excel (.xlsx) faylni yuboring. Ustunlar nomi bo‘lishi mumkin:\n"
+                "name/nom, qty/soni, cost_price/opt_narx, suggest_price/sotuv_narx."
+            )
         bot.answer_callback_query(c.id)
         return
 
-    # cancel
+    # Bekor qilish
     try:
         bot.edit_message_text("Amal bekor qilindi.", chat_id=c.message.chat.id, message_id=c.message.message_id)
     except:
         bot.send_message(uid, "Amal bekor qilindi.", reply_markup=main_keyboard())
+
     clear_state(uid)
     bot.answer_callback_query(c.id)
-
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_excel_wait", content_types=['document'])
 def handle_excel_upload(m):
