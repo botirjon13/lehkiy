@@ -46,3 +46,7 @@ CREATE TABLE IF NOT EXISTS user_carts (
   data JSONB, -- {items: [{product_id, name, qty, price}], customer_id:..., temp:...}
   updated_at TIMESTAMP DEFAULT now()
 );
+
+ALTER TABLE products
+ADD COLUMN cost_price_usd NUMERIC(12,2);
+
