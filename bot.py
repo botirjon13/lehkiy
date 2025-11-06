@@ -1562,10 +1562,11 @@ def export_products_excel_handler(m):
         import pandas as pd
         import tempfile, os
         from datetime import datetime
+        from openpyxl import load_workbook
+        from openpyxl.styles import Font, PatternFill
 
+        # DataFrame
         df = pd.DataFrame(rows)
-
-        # --- O'zbekcha sarlavhalar ---
         df.rename(columns={
             "id": "№",
             "name": "Mahsulot nomi",
@@ -1585,32 +1586,39 @@ def export_products_excel_handler(m):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             file_path = tmp.name
 
-        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Ombor")
+        # 1. Avval yozamiz va to‘liq yopamiz
+        df.to_excel(file_path, index=False, sheet_name="Ombor")
 
-            # --- Jami satrini qo‘shamiz ---
-            from openpyxl import load_workbook
-            wb = load_workbook(file_path)
-            ws = wb["Ombor"]
-            last_row = ws.max_row + 2
+        # 2. Endi ochamiz va jami qatorini qo‘shamiz
+        wb = load_workbook(file_path)
+        ws = wb["Ombor"]
+        last_row = ws.max_row + 2
 
-            ws.cell(row=last_row, column=2, value="Jami:")
-            ws.cell(row=last_row, column=3, value=total_qty)
-            ws.cell(row=last_row, column=4, value=total_usd)
-            ws.cell(row=last_row, column=5, value=total_som)
+        ws.cell(row=last_row, column=2, value="Jami:")
+        ws.cell(row=last_row, column=3, value=total_qty)
+        ws.cell(row=last_row, column=4, value=total_usd)
+        ws.cell(row=last_row, column=5, value=total_som)
 
-            # Formatlash
-            ws.cell(row=last_row, column=2).font = ws.cell(row=1, column=2).font.copy(bold=True)
-            ws.cell(row=last_row, column=3).font = ws.cell(row=1, column=3).font.copy(bold=True)
-            ws.cell(row=last_row, column=4).font = ws.cell(row=1, column=4).font.copy(bold=True)
-            ws.cell(row=last_row, column=5).font = ws.cell(row=1, column=5).font.copy(bold=True)
+        # --- Stil beramiz (sariq fon, qalin yozuv) ---
+        bold_font = Font(bold=True)
+        yellow_fill = PatternFill(start_color="FFFACD", end_color="FFFACD", fill_type="solid")
 
-            wb.save(file_path)
+        for col in range(2, 6):
+            cell = ws.cell(row=last_row, column=col)
+            cell.font = bold_font
+            cell.fill = yellow_fill
 
+        wb.save(file_path)
+
+        # Faylni yuborish
         file_name = f"ombor_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
-
         with open(file_path, "rb") as f:
-            bot.send_document(m.chat.id, f, caption=f"📊 Ombor ro‘yxati ({file_name})", reply_markup=main_keyboard())
+            bot.send_document(
+                m.chat.id,
+                f,
+                caption=f"📊 Ombor ro‘yxati ({file_name})",
+                reply_markup=main_keyboard()
+            )
 
         os.remove(file_path)
 
