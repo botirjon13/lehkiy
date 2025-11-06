@@ -509,7 +509,7 @@ def process_product_cost(message, name, qty):
         f"Optovik narx: {cost_price_usd:.2f} $ = {cost_price_som:,} so'm\n\n"
         f"Endi sotuv narxini kiriting (so'mda):"
     )
-    bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate)
+    bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_usd, usd_rate)
 
 def save_product_to_db(message, name, qty, cost_price_usd, usd_rate):
     """
@@ -523,7 +523,7 @@ def save_product_to_db(message, name, qty, cost_price_usd, usd_rate):
     except ValueError:
         bot.send_message(message.chat.id, "❌ Faqat son kiriting (so‘mda).")
         return bot.register_next_step_handler(
-    message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate
+    message, save_product_to_db, name, qty, cost_price_usd, usd_rate
 )
 
     cost_price_som = int(cost_price_usd * usd_rate)  # dollarni so'mga o'girish
