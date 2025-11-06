@@ -780,6 +780,61 @@ def handle_excel_upload(m):
 def handle_excel_wrong_type(m):
     # foydalanuvchi fayl o'rniga boshqa narsani yuborgan bo'lsa
     bot.send_message(m.chat.id, "Iltimos .xlsx formatidagi Excel fayl yuboring yoki 'Bekor qilish' tugmasi bilan chiqib keting.", reply_markup=cancel_keyboard())
+def process_usd_rate_excel(message, df, col_name, col_qty, col_cost_usd, col_suggest):
+    uid = message.from_user.id
+    try:
+        usd_rate = float(message.text.strip())
+    except:
+        bot.send_message(message.chat.id, "❌ Iltimos faqat raqam kiriting (masalan, 12700).")
+        bot.register_next_step_handler(message, process_usd_rate_excel, df, col_name, col_qty, col_cost_usd, col_suggest)
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+    inserted = updated = 0
+
+    for _, row in df.iterrows():
+        name = str(row[col_name]).strip()
+        qty = int(row[col_qty])
+        cost_usd = float(row[col_cost_usd])
+        cost_sum = int(cost_usd * usd_rate)
+        suggest = int(row[col_suggest]) if row[col_suggest] > 0 else cost_sum + int(cost_sum * 0.1)
+
+        if not name or qty <= 0:
+            continue
+
+        cur.execute("SELECT id FROM products WHERE name ILIKE %s LIMIT 1;", (name,))
+        exists = cur.fetchone()
+        if exists:
+            cur.execute("""
+                UPDATE products
+                SET qty = qty + %s,
+                    cost_price_usd = %s,
+                    usd_rate = %s,
+                    cost_price = %s,
+                    suggest_price = %s
+                WHERE id = %s;
+            """, (qty, cost_usd, usd_rate, cost_sum, suggest, exists[0]))
+            updated += 1
+        else:
+            cur.execute("""
+                INSERT INTO products (name, qty, cost_price_usd, usd_rate, cost_price, suggest_price)
+                VALUES (%s, %s, %s, %s, %s, %s);
+            """, (name, qty, cost_usd, usd_rate, cost_sum, suggest))
+            inserted += 1
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ Excel yuklash yakunlandi.\n"
+        f"📦 Yangi mahsulotlar: {inserted}\n"
+        f"🔁 Yangilanganlar: {updated}",
+        reply_markup=main_keyboard()
+    )
+    clear_state(uid)
 
 # --- END: Excel / Manual product add handlers ---
 
