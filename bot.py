@@ -523,8 +523,8 @@ def save_product_to_db(message, name, qty, cost_price_usd, usd_rate):
     except ValueError:
         bot.send_message(message.chat.id, "❌ Faqat son kiriting (so‘mda).")
         return bot.register_next_step_handler(
-            message, save_product_to_db, name, qty, cost_price_usd, usd_rate
-        )
+    message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate
+)
 
     cost_price_som = int(cost_price_usd * usd_rate)  # dollarni so'mga o'girish
 
