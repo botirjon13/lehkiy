@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS products (
   qty INTEGER NOT NULL DEFAULT 0,
   cost_price BIGINT NOT NULL,    -- optovik narxi (so'm)
   cost_price_usd NUMERIC(12,2), -- optovik narxi (USD)
-  usd_rate NUMERIC(12,2), -- optovik narxi
   suggest_price BIGINT,    -- taxminiy sotish narxi (so'm)
   created_at TIMESTAMP DEFAULT now()
 );
@@ -48,3 +47,6 @@ CREATE TABLE IF NOT EXISTS user_carts (
   data JSONB, -- {items: [{product_id, name, qty, price}], customer_id:..., temp:...}
   updated_at TIMESTAMP DEFAULT now()
 );
+
+ALTER TABLE products
+ADD COLUMN IF NOT EXISTS usd_rate NUMERIC(12,2);
