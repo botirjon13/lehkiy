@@ -511,29 +511,38 @@ def process_product_cost(message, name, qty):
     )
     bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate)
 
-def save_product_to_db(message, name, qty, cost_price_som, cost_price_usd, usd_rate):
+def save_product_to_db(message, name, qty, cost_price_usd, usd_rate):
     """
-    Mahsulotni bazaga saqlaydi:
+    Mahsulotni bazaga saqlaydi yoki yangilaydi:
     - cost_price_usd — dollar narxi
-    - cost_price — so‘m narxi (kurs asosida)
-    - usd_rate — qaysi kurs bilan o‘tkazilgan
+    - usd_rate — joriy kurs
+    - cost_price — so‘mda narx (kurs asosida)
     """
     try:
         suggest_price = int(message.text.strip().replace(" ", ""))
     except ValueError:
         bot.send_message(message.chat.id, "❌ Faqat son kiriting (so‘mda).")
-        return bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate)
+        return bot.register_next_step_handler(
+            message, save_product_to_db, name, qty, cost_price_usd, usd_rate
+        )
+
+    cost_price_som = int(cost_price_usd * usd_rate)  # dollarni so'mga o'girish
 
     conn = get_conn()
     cur = conn.cursor()
 
-    # Avval bazada borligini tekshiramiz (nom va USD narx bo‘yicha)
-    cur.execute("SELECT id, qty FROM products WHERE name = %s AND cost_price_usd = %s;", (name, cost_price_usd))
+    # Bazada borligini tekshiramiz (nom va USD narx bo‘yicha)
+    cur.execute(
+        "SELECT id, qty FROM products WHERE name = %s AND cost_price_usd = %s;",
+        (name, cost_price_usd)
+    )
     existing = cur.fetchone()
 
     if existing:
+        # Mahsulot bor bo'lsa, faqat miqdor yangilanadi
         new_qty = existing[1] + qty
-        cur.execute("UPDATE products SET qty = %s WHERE id = %s;", (new_qty, existing[0]))
+        cur.execute("UPDATE products SET qty = %s, cost_price = %s, usd_rate = %s WHERE id = %s;",
+                    (new_qty, cost_price_som, usd_rate, existing[0]))
         conn.commit()
         msg = (
             f"🔁 Mahsulot yangilandi:\n"
@@ -541,6 +550,7 @@ def save_product_to_db(message, name, qty, cost_price_som, cost_price_usd, usd_r
             f"Sotuv narxi: {suggest_price:,} so‘m"
         )
     else:
+        # Yangi mahsulot qo'shish
         cur.execute(
             """
             INSERT INTO products (name, qty, cost_price, cost_price_usd, usd_rate, suggest_price)
