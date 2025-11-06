@@ -625,31 +625,29 @@ def cb_addprod_menu(c):
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_excel_wait", content_types=['document'])
 def handle_excel_upload(m):
     """
-    Excel fayl qabul qilinganda ishlaydi.
-    - Faylni yuklab oladi
-    - pandas bilan o'qiydi
-    - ustunlarni xaritalaydi (ing/uzb variantlarini qabul qiladi)
-    - har bir qatorni qayta ishlaydi: agar name & cost_price mos bo'lsa -> qty +=, aks holda -> yangi product
-    - natijani userga yuboradi
+    Excel fayl qabul qilinadi va bazaga qo'shiladi:
+    - cost_price_usd → bazaga saqlanadi
+    - cost_price (so'mda) → avtomatik konvertatsiya qilinadi
+    - usd_rate → saqlanadi
     """
     uid = m.from_user.id
     doc = m.document
-    # tekshiruv: fayl turi xlsx bo'lsa davom etamiz
+
+    # fayl turi tekshiruvi
     if not doc or not (doc.mime_type in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream") or doc.file_name.lower().endswith((".xlsx", ".xls"))):
         bot.send_message(m.chat.id, "Iltimos .xlsx fayl yuboring.", reply_markup=cancel_keyboard())
         return
 
     bot.send_message(m.chat.id, "Fayl qabul qilindi, qayta ishlanmoqda... Iltimos kuting.")
     try:
-        # yuklab olish
         file_info = bot.get_file(doc.file_id)
         downloaded = bot.download_file(file_info.file_path)
         xbuf = io.BytesIO(downloaded)
+
         # pandas bilan o'qish
         try:
             df = pd.read_excel(xbuf, engine="openpyxl")
         except Exception as e:
-            # qayta urinib ko'rish (xlrd)?
             try:
                 df = pd.read_excel(xbuf)
             except Exception as e2:
@@ -657,21 +655,15 @@ def handle_excel_upload(m):
                 clear_state(uid)
                 return
 
-        # Ustun nomlarini kichik harfga o'tkazish va strip qilish
-        orig_cols = list(df.columns)
-        cols_map = {c: c.strip().lower() for c in orig_cols}
+        # Ustunlarni kichik harf va strip
+        df.columns = [c.strip().lower() for c in df.columns]
 
-        df.rename(columns={k: cols_map[k] for k in cols_map}, inplace=True)
+        # Potensial ustun nomlari
+        name_keys = ["name","nom","product","product_name","mahsulot","mahsol","mahsulot nomi"]
+        qty_keys = ["qty","quantity","soni","miqdor","son"]
+        cost_usd_keys = ["cost_price_usd","cost_usd","opt_narx_usd","usd narx"]
+        suggest_keys = ["suggest_price","sell_price","price","sotuv_narx","taklif narxi"]
 
-        # Potentsial nom variantlari
-        name_keys = ["name","nom","product","product_name","mahсулот","mahsol","mahsulot nomi"]
-        qty_keys = ["qty","quantity","soni","qty (dona)","miqdor","son"]
-        cost_keys = ["cost_price_usd", "cost_price","cost","opt_narx","opt narx","optprice","optovik narxi",
-    "optovik_narxi","optovik","optoviknarx","opt_narxi","opt_narx "]
-        suggest_keys = ["suggest_price","sell_price","price","sotuv_narx","sotuv narx","sotish narxi",
-    "sotish_narxi","taklif_price","taklifnarx","taklif narx","sotuvnarxi"]
-
-        # topish funksiyasi
         def find_col(keys):
             for k in keys:
                 if k in df.columns:
@@ -680,42 +672,26 @@ def handle_excel_upload(m):
 
         col_name = find_col(name_keys)
         col_qty = find_col(qty_keys)
-        col_cost = find_col(cost_keys)
+        col_cost_usd = find_col(cost_usd_keys)
         col_suggest = find_col(suggest_keys)
 
-        if not col_name:
-            bot.send_message(m.chat.id, "Excel faylda mahsulot nomi topilmadi. Iltimos 'name' yoki 'nom' ustunli fayl yuboring.", reply_markup=main_keyboard())
-            clear_state(uid); return
-        if not col_qty:
-            bot.send_message(m.chat.id, "Excel faylda miqdor (qty/soni) ustuni topilmadi.", reply_markup=main_keyboard())
-            clear_state(uid); return
-        if not col_cost:
-            bot.send_message(m.chat.id, "Excel faylda optovik narx (cost_price) ustuni topilmadi.", reply_markup=main_keyboard())
-            clear_state(uid); return
+        if not col_name or not col_qty or not col_cost_usd:
+            bot.send_message(m.chat.id, "Excel faylda nom, miqdor yoki USD narx ustunlari topilmadi.", reply_markup=main_keyboard())
+            clear_state(uid)
+            return
 
-        # tozalash va turlarga o'tkazish
-        df = df[[col_name, col_qty, col_cost] + ([col_suggest] if col_suggest else [])].copy()
-        df = df.dropna(subset=[col_name])
+        # Kerakli ustunlarni tanlash
+        df = df[[col_name, col_qty, col_cost_usd] + ([col_suggest] if col_suggest else [])].copy()
         df[col_name] = df[col_name].astype(str).str.strip()
-        # qty -> int
-        def to_int_safe(x):
-            try:
-                if pd.isna(x):
-                    return 0
-                if isinstance(x, str):
-                    x = x.replace(",", "").strip()
-                return int(float(x))
-            except:
-                return 0
-        df[col_qty] = df[col_qty].apply(to_int_safe)
-        df[col_cost] = df[col_cost].apply(to_int_safe)
+        df[col_qty] = df[col_qty].apply(lambda x: int(float(str(x).replace(",", "").strip())) if pd.notna(x) else 0)
+        df[col_cost_usd] = df[col_cost_usd].apply(lambda x: float(str(x).replace(",", ".").strip()) if pd.notna(x) else 0)
         if col_suggest:
-            df[col_suggest] = df[col_suggest].apply(to_int_safe)
+            df[col_suggest] = df[col_suggest].apply(lambda x: int(float(str(x).replace(",", "").strip())) if pd.notna(x) else 0)
         else:
             df["suggest_temp"] = 0
             col_suggest = "suggest_temp"
 
-        # qayta ishlash: DB ga kiritish
+        # DB bilan ishlash
         conn = get_conn()
         cur = conn.cursor()
         inserted = 0
@@ -724,36 +700,43 @@ def handle_excel_upload(m):
         errors = []
 
         for idx, row in df.iterrows():
-            pname = (row[col_name] or "").strip()
-            pqty = int(row[col_qty] or 0)
-            pcost = int(row[col_cost] or 0)
-            psuggest = int(row[col_suggest] or 0)
+            pname = str(row[col_name]).strip()
+            pqty = int(row[col_qty])
+            pcost_usd = float(row[col_cost_usd])
+            usd_rate = get_usd_rate()
+            pcost_som = int(pcost_usd * usd_rate)
+            psuggest = int(row[col_suggest])
 
             if not pname or pqty <= 0:
                 skipped += 1
                 continue
 
-            # 1) Agar name va cost_price bir xil bo'lsa -> qty +=
             try:
-                cur.execute("SELECT id, qty FROM products WHERE name ILIKE %s AND cost_price = %s LIMIT 1;", (pname, pcost))
+                cur.execute(
+                    "SELECT id, qty FROM products WHERE name ILIKE %s AND cost_price_usd = %s LIMIT 1;",
+                    (pname, pcost_usd)
+                )
                 existing = cur.fetchone()
                 if existing:
-                    prod_id = existing[0]
-                    cur.execute("UPDATE products SET qty = qty + %s, suggest_price = COALESCE(%s, suggest_price) WHERE id=%s;", (pqty, psuggest if psuggest>0 else None, prod_id))
+                    cur.execute(
+                        "UPDATE products SET qty = qty + %s, cost_price = %s, usd_rate = %s, suggest_price = COALESCE(%s, suggest_price) WHERE id=%s;",
+                        (pqty, pcost_som, usd_rate, psuggest if psuggest>0 else None, existing[0])
+                    )
                     updated += 1
                 else:
-                    # yangi yozuv
-                    cur.execute("INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s);", (pname, pqty, pcost, psuggest if psuggest>0 else None))
+                    cur.execute(
+                        "INSERT INTO products (name, qty, cost_price, cost_price_usd, usd_rate, suggest_price) VALUES (%s, %s, %s, %s, %s, %s);",
+                        (pname, pqty, pcost_som, pcost_usd, usd_rate, psuggest if psuggest>0 else None)
+                    )
                     inserted += 1
             except Exception as e:
-                errors.append(f"Qator {idx+2}: {e}")  # +2 (header+0)
+                errors.append(f"Qator {idx+2}: {e}")
                 continue
 
         conn.commit()
         cur.close()
         conn.close()
 
-        # natija haqida xabar
         summary_lines = [
             "✅ Excel yuklash tugadi.",
             f"📥 Yangi qo'shilganlar: {inserted}",
@@ -762,8 +745,7 @@ def handle_excel_upload(m):
         ]
         if errors:
             summary_lines.append("\n⚠️ Ba'zi xatolar:")
-            for e in errors[:10]:
-                summary_lines.append(e)
+            summary_lines.extend(errors[:10])
             if len(errors) > 10:
                 summary_lines.append(f"... va yana {len(errors)-10} ta xato.")
 
@@ -774,7 +756,6 @@ def handle_excel_upload(m):
         bot.send_message(m.chat.id, f"Xatolik yuz berdi: {e}", reply_markup=main_keyboard())
     finally:
         clear_state(uid)
-
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id, "action") == "add_product_excel_wait", content_types=['text','photo','audio','video','voice','sticker'])
 def handle_excel_wrong_type(m):
