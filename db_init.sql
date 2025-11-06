@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS products (
   name TEXT NOT NULL,      -- name in latin
   qty INTEGER NOT NULL DEFAULT 0,
   cost_price BIGINT NOT NULL,    -- optovik narxi (so'm)
+  cost_price_usd NUMERIC(12,2), -- optovik narxi (USD)
+  usd_rate NUMERIC(12,2); ---- optovik narxi
   suggest_price BIGINT,    -- taxminiy sotish narxi (so'm)
   created_at TIMESTAMP DEFAULT now()
 );
