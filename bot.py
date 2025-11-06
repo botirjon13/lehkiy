@@ -28,6 +28,36 @@ import psycopg2
 import os
 from datetime import datetime
 import traceback
+import requests
+from datetime import datetime, timedelta
+
+# --- USD kursini olish (Markaziy bank API) ---
+USD_RATE_CACHE = {"rate": None, "time": None}
+
+def get_usd_rate():
+    """
+    USD kursini Markaziy bank API'dan oladi (sotib olish kursi).
+    24 soatda bir marta yangilanadi.
+    """
+    global USD_RATE_CACHE
+    now = datetime.utcnow()
+    # Kesh 24 soatdan eski bo'lmasa, mavjud kursni qaytaramiz
+    if USD_RATE_CACHE["rate"] and USD_RATE_CACHE["time"] and now - USD_RATE_CACHE["time"] < timedelta(hours=24):
+        return USD_RATE_CACHE["rate"]
+
+    try:
+        resp = requests.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/")
+        data = resp.json()
+        if isinstance(data, list) and len(data) > 0:
+            rate = float(data[0]["Rate"])
+            USD_RATE_CACHE = {"rate": rate, "time": now}
+            print(f"💰 USD kursi yangilandi: 1 USD = {rate} so'm")
+            return rate
+    except Exception as e:
+        print("⚠️ Kurs olishda xato:", e)
+
+    # Zaxira qiymat (API ishlamasa)
+    return USD_RATE_CACHE["rate"] or 12800.0
 
 # --- Load env ---
 load_dotenv()
@@ -460,42 +490,74 @@ def process_product_qty(message, name):
     bot.register_next_step_handler(message, process_product_cost, name, qty)
 
 def process_product_cost(message, name, qty):
+    """
+    Foydalanuvchi optovik narxni USD da kiritadi.
+    Bot avtomatik kursni oladi, so‘mga aylantiradi.
+    """
     try:
-        cost_price = int(message.text.strip())
+        cost_price_usd = float(message.text.strip().replace(",", "."))
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Faqat son kiriting.")
+        bot.send_message(message.chat.id, "❌ Faqat son kiriting (masalan: 12.5).")
         return bot.register_next_step_handler(message, process_product_cost, name, qty)
-    bot.send_message(message.chat.id, "Sotuv narxini kiriting (so‘mda):")
-    bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price)
 
-def save_product_to_db(message, name, qty, cost_price):
+    usd_rate = get_usd_rate()
+    cost_price_som = int(cost_price_usd * usd_rate)
+
+    bot.send_message(
+        message.chat.id,
+        f"💵 Kurs: 1 USD = {usd_rate:,.0f} so'm\n"
+        f"Optovik narx: {cost_price_usd:.2f} $ = {cost_price_som:,} so'm\n\n"
+        f"Endi sotuv narxini kiriting (so'mda):"
+    )
+    bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate)
+
+def save_product_to_db(message, name, qty, cost_price_som, cost_price_usd, usd_rate):
+    """
+    Mahsulotni bazaga saqlaydi:
+    - cost_price_usd — dollar narxi
+    - cost_price — so‘m narxi (kurs asosida)
+    - usd_rate — qaysi kurs bilan o‘tkazilgan
+    """
     try:
-        suggest_price = int(message.text.strip())
+        suggest_price = int(message.text.strip().replace(" ", ""))
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Faqat son kiriting.")
-        return bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price)
+        bot.send_message(message.chat.id, "❌ Faqat son kiriting (so‘mda).")
+        return bot.register_next_step_handler(message, save_product_to_db, name, qty, cost_price_som, cost_price_usd, usd_rate)
 
     conn = get_conn()
     cur = conn.cursor()
 
-    # Shu nom va opt_narxdagi mahsulot bormi?
-    cur.execute("SELECT id, qty FROM products WHERE name = %s AND cost_price = %s;", (name, cost_price))
+    # Avval bazada borligini tekshiramiz (nom va USD narx bo‘yicha)
+    cur.execute("SELECT id, qty FROM products WHERE name = %s AND cost_price_usd = %s;", (name, cost_price_usd))
     existing = cur.fetchone()
 
     if existing:
         new_qty = existing[1] + qty
         cur.execute("UPDATE products SET qty = %s WHERE id = %s;", (new_qty, existing[0]))
         conn.commit()
-        bot.send_message(message.chat.id, f"🔁 Mahsulot yangilandi:\n{name} | {new_qty} dona | {cost_price} so‘m (optovik)")
+        msg = (
+            f"🔁 Mahsulot yangilandi:\n"
+            f"{name}\n{new_qty} dona | {cost_price_usd:.2f} $ ({cost_price_som:,} so‘m)\n"
+            f"Sotuv narxi: {suggest_price:,} so‘m"
+        )
     else:
         cur.execute(
-            "INSERT INTO products (name, qty, cost_price, suggest_price) VALUES (%s, %s, %s, %s);",
-            (name, qty, cost_price, suggest_price)
+            """
+            INSERT INTO products (name, qty, cost_price, cost_price_usd, usd_rate, suggest_price)
+            VALUES (%s, %s, %s, %s, %s, %s);
+            """,
+            (name, qty, cost_price_som, cost_price_usd, usd_rate, suggest_price)
         )
         conn.commit()
-        bot.send_message(message.chat.id, f"✅ Yangi mahsulot qo‘shildi:\n{name} | {qty} dona | {cost_price} so‘m (optovik) | {suggest_price} so‘m (sotuv)")
+        msg = (
+            f"✅ Yangi mahsulot qo‘shildi:\n"
+            f"{name}\n{qty} dona | {cost_price_usd:.2f} $ ({cost_price_som:,} so‘m)\n"
+            f"Sotuv narxi: {suggest_price:,} so‘m"
+        )
+
     cur.close()
     conn.close()
+    bot.send_message(message.chat.id, msg)
 
 @bot.callback_query_handler(func=lambda c: c.data in ("addprod_manual", "addprod_excel", "cancel"))
 def cb_addprod_menu(c):
@@ -1216,7 +1278,7 @@ def export_stock_image():
         lines.append("Omborda hech qanday mahsulot yo'q.")
     else:
         for r in rows:
-            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — opt: {format_money(r['cost_price'])} — taklif: {format_money(r['suggest_price'])}")
+            lines.append(f"{r['id']}. {r['name']} — {r['qty']} dona — {r['cost_price_usd']:.2f} $ ({format_money(r['cost_price'])}) — taklif: {format_money(r['suggest_price'])}")
 
     font = _get_font(16)
     temp = Image.new("RGB", (1000, 2000), "white")
