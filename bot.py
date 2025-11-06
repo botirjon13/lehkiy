@@ -1547,7 +1547,10 @@ def export_products_excel_handler(m):
     try:
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, name, qty, cost_price, suggest_price, created_at FROM products ORDER BY id;")
+        cur.execute("""
+            SELECT id, name, qty, cost_price_usd, cost_price, suggest_price, created_at
+            FROM products ORDER BY id;
+        """)
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -1556,33 +1559,53 @@ def export_products_excel_handler(m):
             bot.send_message(m.chat.id, "📦 Omborda hech qanday mahsulot yo‘q.", reply_markup=main_keyboard())
             return
 
-        # DataFrame yaratamiz
+        import pandas as pd
+        import tempfile, os
+        from datetime import datetime
+
         df = pd.DataFrame(rows)
 
-        # O'zbekcha sarlavhalar qo'yamiz
+        # --- O'zbekcha sarlavhalar ---
         df.rename(columns={
             "id": "№",
             "name": "Mahsulot nomi",
             "qty": "Miqdor (dona)",
+            "cost_price_usd": "Narx (USD)",
             "cost_price": "Narx (so‘m)",
             "suggest_price": "Taklif narxi (so‘m)",
             "created_at": "Qo‘shilgan sana"
         }, inplace=True)
 
-        # Raqamlarni formatlaymiz (butun son sifatida)
-        df["Narx (so‘m)"] = df["Narx (so‘m)"].astype(float).round(0).astype(int)
-        df["Taklif narxi (so‘m)"] = df["Taklif narxi (so‘m)"].astype(float).round(0).astype(int)
+        # --- Jami qiymatlar ---
+        total_qty = df["Miqdor (dona)"].sum()
+        total_usd = df["Narx (USD)"].sum()
+        total_som = df["Narx (so‘m)"].sum()
 
-        # Excel fayl yaratish
-        import tempfile, os
-        from datetime import datetime
-
+        # --- Excel fayl yaratish ---
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             file_path = tmp.name
 
-        # Pandas ExcelWriter orqali formatlab yozamiz
         with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Ombor")
+
+            # --- Jami satrini qo‘shamiz ---
+            from openpyxl import load_workbook
+            wb = load_workbook(file_path)
+            ws = wb["Ombor"]
+            last_row = ws.max_row + 2
+
+            ws.cell(row=last_row, column=2, value="Jami:")
+            ws.cell(row=last_row, column=3, value=total_qty)
+            ws.cell(row=last_row, column=4, value=total_usd)
+            ws.cell(row=last_row, column=5, value=total_som)
+
+            # Formatlash
+            ws.cell(row=last_row, column=2).font = ws.cell(row=1, column=2).font.copy(bold=True)
+            ws.cell(row=last_row, column=3).font = ws.cell(row=1, column=3).font.copy(bold=True)
+            ws.cell(row=last_row, column=4).font = ws.cell(row=1, column=4).font.copy(bold=True)
+            ws.cell(row=last_row, column=5).font = ws.cell(row=1, column=5).font.copy(bold=True)
+
+            wb.save(file_path)
 
         file_name = f"ombor_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
 
