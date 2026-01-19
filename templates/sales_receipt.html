@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Chek №{{ sale_id }}</h2>
+<pre style="white-space: pre-wrap; background: #f7f7f7; padding: 12px; border-radius: 6px;">{{ receipt_text }}</pre>
+<a class="btn" href="{{ url_for('sales_receipt_image', sale_id=sale_id) }}">Chek (PNG) yuklab olish</a>
+<a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yangi savdo</a>
+{% endblock %}
