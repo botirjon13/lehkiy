@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Savdo boshlash</h2>
+<form method="get">
+    <input type="text" name="q" value="{{ search }}" placeholder="Mahsulot qidirish">
+    <button class="btn" type="submit">Qidirish</button>
+    <a class="btn btn-secondary" href="{{ url_for('sales_cart') }}">Savatcha</a>
+</form>
+<table>
+    <thead>
+        <tr>
+            <th>Nomi</th>
+            <th>Miqdor</th>
+            <th>Taklif narxi</th>
+            <th>Amal</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for p in products %}
+        <tr>
+            <td>{{ p.name }}</td>
+            <td>{{ p.qty }}</td>
+            <td>{{ p.suggest_price }}</td>
+            <td>
+                <form method="post" action="{{ url_for('sales_cart') }}">
+                    <input type="hidden" name="product_id" value="{{ p.id }}">
+                    <input type="number" name="qty" min="1" max="{{ p.qty }}" placeholder="Miqdor" required>
+                    <input type="number" name="price" placeholder="Narx" value="{{ p.suggest_price }}" required>
+                    <button class="btn" type="submit">Qo'shish</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
