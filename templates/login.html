@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; }
+        .card { max-width: 400px; margin: 60px auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+        label { display: block; margin-bottom: 6px; font-weight: bold; }
+        input, select { width: 100%; padding: 8px; margin-bottom: 12px; }
+        button { width: 100%; padding: 10px; background: #2c3e50; color: white; border: none; border-radius: 4px; }
+        .flash { padding: 10px; margin-bottom: 12px; border-radius: 6px; }
+        .flash.error { background: #fbeaea; color: #c0392b; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Kirish</h2>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="post">
+            <label for="login_type">Kirish turi</label>
+            <select name="login_type" id="login_type" onchange="toggleFields()">
+                <option value="admin">Admin (Telegram ID)</option>
+                <option value="seller">Sotuvchi (login/parol)</option>
+            </select>
+
+            <div id="admin_fields">
+                <label for="telegram_id">Telegram ID</label>
+                <input type="text" name="telegram_id" id="telegram_id" placeholder="1262207928">
+            </div>
+
+            <div id="seller_fields" style="display:none;">
+                <label for="username">Login</label>
+                <input type="text" name="username" id="username">
+
+                <label for="password">Parol</label>
+                <input type="password" name="password" id="password">
+            </div>
+
+            <button type="submit">Kirish</button>
+        </form>
+    </div>
+
+<script>
+    function toggleFields() {
+        var type = document.getElementById('login_type').value;
+        document.getElementById('admin_fields').style.display = type === 'admin' ? 'block' : 'none';
+        document.getElementById('seller_fields').style.display = type === 'seller' ? 'block' : 'none';
+    }
+</script>
+</body>
+</html>
