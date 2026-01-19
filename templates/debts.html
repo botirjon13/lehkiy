@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Qarzdorlar</h2>
+<a class="btn" href="{{ url_for('debts_export') }}">Excel yuklash</a>
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Mijoz</th>
+            <th>Telefon</th>
+            <th>Qarz</th>
+            <th>Sana</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for d in debts %}
+        <tr>
+            <td>{{ d.id }}</td>
+            <td>{{ d.name }}</td>
+            <td>{{ d.phone }}</td>
+            <td>{{ format_money(d.amount) }}</td>
+            <td>{{ d.created_at }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
