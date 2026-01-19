@@ -1325,7 +1325,7 @@ def checkout_confirm_format(m):
 def export_stock_image():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, name, qty, cost_price, suggest_price FROM products ORDER BY id;")
+    cur.execute("SELECT id, name, qty, cost_price_usd, cost_price, suggest_price FROM products ORDER BY id;")
     rows = cur.fetchall()
     cur.close()
     conn.close()
