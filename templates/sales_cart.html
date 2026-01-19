@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Savatcha</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Nomi</th>
+            <th>Miqdor</th>
+            <th>Narx</th>
+            <th>Jami</th>
+            <th>Amal</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for item in cart %}
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ item.qty }}</td>
+            <td>{{ item.price }}</td>
+            <td>{{ item.qty * item.price }}</td>
+            <td><a class="btn btn-danger" href="{{ url_for('sales_cart_remove', index=loop.index0) }}">O'chirish</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<p><strong>Umumiy: {{ total }}</strong></p>
+<a class="btn" href="{{ url_for('sales_checkout') }}">Checkout</a>
+<a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yana mahsulot</a>
+{% endblock %}
