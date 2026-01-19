@@ -273,13 +273,13 @@ def receipt_image_bytes(sale_id):
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
-    # 80mm thermal: 576px width (printer-friendly)
+    # 80mm termal chek: 576px
     W = 576
     P = 22
     GAP = 8
 
     font_brand = _get_font(34)
-    font_title = _get_font(26)
+    font_title = _get_font(24)
     font_bold = _get_font(22)
     font = _get_font(20)
     font_small = _get_font(18)
@@ -287,7 +287,6 @@ def receipt_image_bytes(sale_id):
     temp = Image.new("RGB", (W, 10), "white")
     d = ImageDraw.Draw(temp)
 
-    # columns (ITEM | QTY | PRICE | TOTAL)
     col_name_w = W - (P * 2) - 240
     col_qty_w = 60
     col_price_w = 90
@@ -299,19 +298,20 @@ def receipt_image_bytes(sale_id):
     total_amount = int(sale.get("total_amount") or 0)
     pay_type = (sale.get("payment_type") or "-").upper()
 
+    # ✅ HAR DOIM 3 ta: (kind, payload, font)
     blocks = []
     blocks.append(("center", "SRM", font_brand))
     blocks.append(("center", "SALES RECEIPT", font_title))
-    blocks.append(("hr", "", None))
+    blocks.append(("hr", None, None))
 
-    blocks.append(("kv", ("Chek ID", f"#{sale_id}", font)))
-    blocks.append(("kv", ("Sana", created_local.strftime("%d.%m.%Y %H:%M"), font)))
-    blocks.append(("kv", ("To'lov", pay_type, font_bold)))
-    blocks.append(("kv", ("Sotuvchi", seller_display, font_small)))
-    blocks.append(("kv", ("Mijoz", cust_line, font_small)))
+    blocks.append(("kv", ("Chek ID", f"#{sale_id}"), font))
+    blocks.append(("kv", ("Sana", created_local.strftime("%d.%m.%Y %H:%M")), font))
+    blocks.append(("kv", ("To'lov", pay_type), font_bold))
+    blocks.append(("kv", ("Sotuvchi", seller_display), font_small))
+    blocks.append(("kv", ("Mijoz", cust_line), font_small))
 
-    blocks.append(("hr", "", None))
-    blocks.append(("table_head", "", None))
+    blocks.append(("hr", None, None))
+    blocks.append(("table_head", None, None))
 
     for it in items:
         name = str(it.get("name") or "").strip()
@@ -320,46 +320,50 @@ def receipt_image_bytes(sale_id):
         total = int(it.get("total") or (qty * price))
 
         name_lines = _wrap_text(d, name, font, col_name_w)
+
         blocks.append(("row", {
             "name": name_lines[0],
             "qty": str(qty),
             "price": format_som_plain(price),
             "total": format_som_plain(total),
-            "font": font
-        }))
-        for extra in name_lines[1:]:
-            blocks.append(("row_sub", {"name": extra, "font": font}))
+        }, font))
 
-    blocks.append(("hr", "", None))
-    blocks.append(("sum", ("JAMI", f"{format_som_plain(total_amount)} so'm", font_brand)))
-    blocks.append(("hr", "", None))
-    blocks.append(("center_small", "Tashrifingiz uchun rahmat!", font_small))
+        for extra in name_lines[1:]:
+            blocks.append(("row_sub", {"name": extra}, font))
+
+    blocks.append(("hr", None, None))
+    blocks.append(("sum", ("JAMI", f"{format_som_plain(total_amount)} so'm"), font_brand))
+    blocks.append(("hr", None, None))
+    blocks.append(("center", "Tashrifingiz uchun rahmat!", font_small))
 
     # ---- height calc ----
     tmp = Image.new("RGB", (W, 10), "white")
     draw_tmp = ImageDraw.Draw(tmp)
 
     H = P
+
     def add_h(text, fnt, extra=GAP):
         nonlocal H
         _, hh = _measure_text(draw_tmp, text, fnt)
         H += hh + extra
 
     for kind, payload, fnt in blocks:
-        if kind in ("center", "center_small"):
-            add_h(payload, fnt, GAP)
+        if kind == "center":
+            add_h(str(payload), fnt, GAP)
         elif kind == "hr":
             H += 18
         elif kind == "kv":
-            k, v, ff = payload
-            add_h(f"{k}: {v}", ff, 6)
+            k, v = payload
+            add_h(f"{k}: {v}", fnt, 6)
         elif kind == "table_head":
             H += 36
         elif kind in ("row", "row_sub"):
-            add_h(payload["name"], payload.get("font", font), 6)
+            add_h(payload["name"], fnt, 6)
         elif kind == "sum":
-            k, v, ff = payload
-            add_h(f"{k} {v}", ff, 10)
+            k, v = payload
+            add_h(f"{k} {v}", fnt, 10
+
+            )
 
     qr_size = 180
     H += qr_size + 30 + P
@@ -367,7 +371,6 @@ def receipt_image_bytes(sale_id):
 
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
-
     y = P
 
     def hr():
@@ -430,23 +433,21 @@ def receipt_image_bytes(sale_id):
 
     for kind, payload, fnt in blocks:
         if kind == "center":
-            center(payload, fnt)
-        elif kind == "center_small":
-            center(payload, fnt)
+            center(str(payload), fnt)
         elif kind == "hr":
             hr()
         elif kind == "kv":
-            k, v, ff = payload
-            kv(k, v, ff)
+            k, v = payload
+            kv(k, v, fnt)
         elif kind == "table_head":
             table_head()
         elif kind == "row":
-            row(payload["name"], payload["qty"], payload["price"], payload["total"], payload.get("font", font))
+            row(payload["name"], payload["qty"], payload["price"], payload["total"], fnt)
         elif kind == "row_sub":
-            row(payload["name"], None, None, None, payload.get("font", font))
+            row(payload["name"], None, None, None, fnt)
         elif kind == "sum":
-            k, v, ff = payload
-            sum_line(k, v, ff)
+            k, v = payload
+            sum_line(k, v, fnt)
 
     # QR
     try:
