@@ -1,5 +1,4 @@
-@@ -28,25 +28,34 @@ 
-  CREATE TABLE IF NOT EXISTS sale_items (
+CREATE TABLE IF NOT EXISTS sale_items (
   id SERIAL PRIMARY KEY,
   sale_id INTEGER REFERENCES sales(id),
   product_id INTEGER REFERENCES products(id),
