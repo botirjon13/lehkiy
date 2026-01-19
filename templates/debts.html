@@ -1,27 +1,110 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Qarzdorlar</h2>
-<a class="btn" href="{{ url_for('debts_export') }}">Excel yuklash</a>
-<table>
-    <thead>
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Qarzdorlar</h2>
+    <p class="subtitle">Mijozlar qarzlari ro‘yxati va eksport</p>
+  </div>
+
+  <div class="actions">
+    <a class="btn" href="{{ url_for('debts_export') }}">Excel yuklash</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
         <tr>
-            <th>#</th>
-            <th>Mijoz</th>
-            <th>Telefon</th>
-            <th>Qarz</th>
-            <th>Sana</th>
+          <th>#</th>
+          <th>Mijoz</th>
+          <th>Telefon</th>
+          <th>Qarz</th>
+          <th>Sana</th>
         </tr>
-    </thead>
-    <tbody>
-    {% for d in debts %}
+      </thead>
+      <tbody>
+      {% for d in debts %}
         <tr>
-            <td>{{ d.id }}</td>
-            <td>{{ d.name }}</td>
-            <td>{{ d.phone }}</td>
-            <td>{{ format_money(d.amount) }}</td>
-            <td>{{ d.created_at }}</td>
+          <td>#{{ d.id }}</td>
+          <td>
+            <div class="cell-title">{{ d.name }}</div>
+            <div class="cell-sub">ID: {{ d.id }}</div>
+          </td>
+          <td><span class="tag">{{ d.phone }}</span></td>
+          <td>
+            <span class="money">{{ format_money(d.amount) }}</span>
+          </td>
+          <td class="muted">
+            {{ d.created_at.strftime('%d.%m.%Y %H:%M') if d.created_at else '-' }}
+          </td>
         </tr>
-    {% endfor %}
-    </tbody>
-</table>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  /* Debts-only premium tweaks (base dizayniga mos) */
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{
+    margin:0 0 6px 0;
+    font-size:24px;
+    letter-spacing:.2px;
+  }
+  .subtitle{
+    margin:0;
+    color: rgba(229,231,235,.72);
+    font-size:14px;
+  }
+  .actions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 12px;
+  }
+
+  .cell-title{
+    font-weight: 800;
+    color: rgba(229,231,235,.95);
+  }
+  .cell-sub{
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(229,231,235,.55);
+  }
+
+  .money{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(22,163,74,.28);
+    background: rgba(22,163,74,.12);
+    color: rgba(229,231,235,.95);
+    font-weight: 800;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .muted{ color: rgba(229,231,235,.70); }
+
+  @media (max-width: 640px){
+    .page-head{ flex-direction:column; align-items:flex-start; }
+  }
+</style>
+
 {% endblock %}
