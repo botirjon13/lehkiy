@@ -1,5 +1,5 @@
 -- =========================
--- CORE TABLES (BOT GA MOS)
+-- DB INIT (BOT + WEB)
 -- =========================
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS products (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   qty INTEGER NOT NULL DEFAULT 0,
-  cost_price BIGINT NOT NULL DEFAULT 0,         -- so'm
-  cost_price_usd NUMERIC(12,2) NOT NULL DEFAULT 0,
+  cost_price BIGINT NOT NULL DEFAULT 0,            -- so'm
+  cost_price_usd NUMERIC(12,2) NOT NULL DEFAULT 0, -- USD
   usd_rate NUMERIC(12,2),
   suggest_price BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT now()
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS sales (
   id SERIAL PRIMARY KEY,
   customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
   total_amount BIGINT NOT NULL DEFAULT 0,
-  payment_type TEXT NOT NULL DEFAULT 'naqd',     -- 'naqd' | 'qarz'
+  payment_type TEXT NOT NULL DEFAULT 'naqd',
   seller_phone TEXT,
   created_at TIMESTAMP DEFAULT now()
 );
@@ -62,9 +62,7 @@ CREATE TABLE IF NOT EXISTS web_users (
   created_at TIMESTAMP DEFAULT now()
 );
 
--- =========================
--- INDEXES
--- =========================
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_products_name ON products (name);
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers (phone);
 CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales (customer_id);
