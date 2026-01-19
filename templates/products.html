@@ -1,37 +1,254 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Mahsulotlar</h2>
-<form method="get">
-    <input type="text" name="q" value="{{ search }}" placeholder="Qidiruv">
-    <button class="btn" type="submit">Qidirish</button>
-    <a class="btn btn-secondary" href="{{ url_for('products_add') }}">Qo'shish</a>
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Mahsulotlar</h2>
+    <p class="subtitle">Ombor holati, qidiruv va eksport</p>
+  </div>
+
+  <div class="head-actions">
+    <a class="btn btn-secondary" href="{{ url_for('products_add') }}">Qo‘shish</a>
     <a class="btn btn-secondary" href="{{ url_for('products_upload') }}">Excel yuklash</a>
     <a class="btn" href="{{ url_for('stock_export') }}">Excel eksport</a>
-</form>
-<table>
-    <thead>
+  </div>
+</div>
+
+<div class="toolbar">
+  <form class="searchbar" method="get" action="{{ url_for('products') }}">
+    <div class="searchbox">
+      <span class="ico">🔎</span>
+      <input
+        type="text"
+        name="q"
+        value="{{ search }}"
+        placeholder="Mahsulot nomi bo‘yicha qidiruv…"
+        autocomplete="off"
+      />
+    </div>
+    <button class="btn" type="submit">Qidirish</button>
+
+    {% if search %}
+      <a class="btn btn-secondary" href="{{ url_for('products') }}">Tozalash</a>
+    {% endif %}
+  </form>
+
+  <div class="mini-stats">
+    <div class="stat">
+      <div class="stat-k">Mahsulotlar</div>
+      <div class="stat-v">{{ products|length }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
         <tr>
-            <th>ID</th>
-            <th>Nomi</th>
-            <th>Miqdor</th>
-            <th>USD narx</th>
-            <th>So'm narx</th>
-            <th>Taklif narxi</th>
-            <th>Kiritilgan</th>
+          <th style="width:72px;">ID</th>
+          <th>Nomi</th>
+          <th style="width:110px;">Miqdor</th>
+          <th style="width:110px;">USD narx</th>
+          <th style="width:140px;">So‘m narx</th>
+          <th style="width:150px;">Taklif narxi</th>
+          <th style="width:170px;">Kiritilgan</th>
         </tr>
-    </thead>
-    <tbody>
-    {% for p in products %}
+      </thead>
+      <tbody>
+      {% for p in products %}
         <tr>
-            <td>{{ p.id }}</td>
-            <td>{{ p.name }}</td>
-            <td>{{ p.qty }}</td>
-            <td>{{ p.cost_price_usd }}</td>
-            <td>{{ p.cost_price }}</td>
-            <td>{{ p.suggest_price }}</td>
-            <td>{{ p.created_at }}</td>
+          <td><span class="pill">#{{ p.id }}</span></td>
+
+          <td>
+            <div class="cell-title">{{ p.name }}</div>
+            <div class="cell-sub">Mahsulot ID: {{ p.id }}</div>
+          </td>
+
+          <td>
+            {% if p.qty is not none and p.qty <= 0 %}
+              <span class="badge danger">Tugagan</span>
+            {% elif p.qty is not none and p.qty <= 5 %}
+              <span class="badge warn">{{ p.qty }} dona</span>
+            {% else %}
+              <span class="badge ok">{{ p.qty }} dona</span>
+            {% endif %}
+          </td>
+
+          <td><span class="mono">{{ '%.2f'|format(p.cost_price_usd or 0) }} $</span></td>
+          <td><span class="mono">{{ (p.cost_price or 0) }}</span></td>
+          <td><span class="money">{{ (p.suggest_price or 0) }}</span></td>
+
+          <td class="muted">
+            {{ p.created_at.strftime('%d.%m.%Y %H:%M') if p.created_at else '-' }}
+          </td>
         </tr>
-    {% endfor %}
-    </tbody>
-</table>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  /* Products-only premium styles (base dizayniga mos) */
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:14px;
+  }
+  .title{
+    margin:0 0 6px 0;
+    font-size:24px;
+    letter-spacing:.2px;
+  }
+  .subtitle{
+    margin:0;
+    color: rgba(229,231,235,.72);
+    font-size:14px;
+  }
+  .head-actions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .toolbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin: 10px 0 14px 0;
+    flex-wrap:wrap;
+  }
+
+  .searchbar{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+    margin:0;
+  }
+  .searchbox{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    min-width: min(520px, 100%);
+  }
+  .searchbox .ico{ opacity:.8; }
+  .searchbox input{
+    border:none;
+    background:transparent;
+    outline:none;
+    color: rgba(229,231,235,.92);
+    width:100%;
+    padding:0;
+    margin:0;
+  }
+
+  .mini-stats{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+  .stat{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.04);
+    min-width: 140px;
+  }
+  .stat-k{
+    font-size:12px;
+    color: rgba(229,231,235,.62);
+    margin-bottom: 4px;
+  }
+  .stat-v{
+    font-size:18px;
+    font-weight: 900;
+    letter-spacing: .2px;
+  }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 12px;
+  }
+
+  .pill{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border:1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    font-weight: 800;
+    font-size: 12px;
+    color: rgba(229,231,235,.92);
+    white-space:nowrap;
+  }
+
+  .cell-title{
+    font-weight: 900;
+    color: rgba(229,231,235,.95);
+  }
+  .cell-sub{
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(229,231,235,.55);
+  }
+
+  .badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 900;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .badge.ok{
+    background: rgba(22,163,74,.12);
+    border-color: rgba(22,163,74,.30);
+    color: rgba(229,231,235,.92);
+  }
+  .badge.warn{
+    background: rgba(245,158,11,.14);
+    border-color: rgba(245,158,11,.34);
+    color: rgba(229,231,235,.92);
+  }
+  .badge.danger{
+    background: rgba(239,68,68,.12);
+    border-color: rgba(239,68,68,.30);
+    color: rgba(229,231,235,.92);
+  }
+
+  .mono{
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    color: rgba(229,231,235,.88);
+    white-space:nowrap;
+  }
+  .money{
+    font-variant-numeric: tabular-nums;
+    font-weight: 900;
+    color: rgba(229,231,235,.95);
+    white-space:nowrap;
+  }
+
+  .muted{ color: rgba(229,231,235,.70); }
+
+  @media (max-width: 860px){
+    .head-actions{ width:100%; }
+    .searchbox{ min-width: 100%; }
+  }
+</style>
+
 {% endblock %}
