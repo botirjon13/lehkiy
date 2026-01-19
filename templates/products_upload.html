@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Excel orqali yuklash</h2>
+<form method="post" enctype="multipart/form-data">
+    <label>Excel fayl</label>
+    <input type="file" name="file" accept=".xlsx,.xls" required>
+    <button class="btn" type="submit">Yuklash</button>
+</form>
+{% endblock %}
