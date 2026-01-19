@@ -1,36 +1,209 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Savdo boshlash</h2>
-<form method="get">
-    <input type="text" name="q" value="{{ search }}" placeholder="Mahsulot qidirish">
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Savdo boshlash</h2>
+    <p class="subtitle">Mahsulot tanlang, miqdor va narxni kiriting, savatchaga qo‘shing</p>
+  </div>
+
+  <div class="head-actions">
+    <a class="btn btn-secondary" href="{{ url_for('sales_cart') }}">Savatcha →</a>
+  </div>
+</div>
+
+<div class="card toolbar">
+  <form method="get" class="search-row">
+    <div class="search">
+      <input type="text" name="q" value="{{ search }}" placeholder="Mahsulot qidirish (nom bo‘yicha)" />
+    </div>
     <button class="btn" type="submit">Qidirish</button>
     <a class="btn btn-secondary" href="{{ url_for('sales_cart') }}">Savatcha</a>
-</form>
-<table>
-    <thead>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
         <tr>
-            <th>Nomi</th>
-            <th>Miqdor</th>
-            <th>Taklif narxi</th>
-            <th>Amal</th>
+          <th>Mahsulot</th>
+          <th class="num">Miqdor</th>
+          <th class="num">Taklif narxi</th>
+          <th class="actions-col">Qo‘shish</th>
         </tr>
-    </thead>
-    <tbody>
-    {% for p in products %}
-        <tr>
-            <td>{{ p.name }}</td>
-            <td>{{ p.qty }}</td>
-            <td>{{ p.suggest_price }}</td>
+      </thead>
+      <tbody>
+      {% if products %}
+        {% for p in products %}
+          <tr>
             <td>
-                <form method="post" action="{{ url_for('sales_cart') }}">
-                    <input type="hidden" name="product_id" value="{{ p.id }}">
-                    <input type="number" name="qty" min="1" max="{{ p.qty }}" placeholder="Miqdor" required>
-                    <input type="number" name="price" placeholder="Narx" value="{{ p.suggest_price }}" required>
-                    <button class="btn" type="submit">Qo'shish</button>
-                </form>
+              <div class="cell-title">{{ p.name }}</div>
+              <div class="cell-sub">ID: {{ p.id }}</div>
             </td>
+
+            <td class="num">
+              <span class="pill">{{ p.qty }}</span>
+            </td>
+
+            <td class="num">
+              <span class="money">{{ p.suggest_price }}</span>
+            </td>
+
+            <td class="actions-col">
+              <form method="post" action="{{ url_for('sales_cart') }}" class="inline-form">
+                <input type="hidden" name="product_id" value="{{ p.id }}">
+
+                <div class="field">
+                  <input
+                    type="number"
+                    name="qty"
+                    min="1"
+                    max="{{ p.qty }}"
+                    placeholder="Miqdor"
+                    required
+                  >
+                </div>
+
+                <div class="field">
+                  <input
+                    type="number"
+                    name="price"
+                    placeholder="Narx"
+                    value="{{ p.suggest_price }}"
+                    required
+                  >
+                </div>
+
+                <button class="btn" type="submit">Qo‘shish</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="4" class="empty">
+            Mahsulot topilmadi. Qidiruv so‘zini o‘zgartirib ko‘ring.
+          </td>
         </tr>
-    {% endfor %}
-    </tbody>
-</table>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{ margin:0 0 6px 0; font-size:24px; letter-spacing:.2px; }
+  .subtitle{ margin:0; color: rgba(229,231,235,.72); font-size:14px; }
+  .head-actions{ display:flex; gap:10px; flex-wrap:wrap; }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+  .toolbar{ padding: 14px; }
+
+  .search-row{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+    margin:0;
+  }
+  .search{ flex: 1; min-width: 220px; }
+  .search input{
+    width:100%;
+    padding:10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.22);
+    color: rgba(229,231,235,.92);
+    outline:none;
+  }
+  .search input:focus{
+    border-color: rgba(59,130,246,.50);
+    box-shadow: 0 0 0 4px rgba(59,130,246,.14);
+  }
+
+  .num{ text-align:right; white-space:nowrap; }
+  .actions-col{ text-align:right; width:1%; white-space:nowrap; }
+
+  .cell-title{
+    font-weight: 950;
+    color: rgba(229,231,235,.95);
+  }
+  .cell-sub{
+    margin-top:4px;
+    font-size:12px;
+    color: rgba(229,231,235,.55);
+  }
+
+  .pill{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(229,231,235,.92);
+    min-width: 48px;
+    justify-content: center;
+  }
+
+  .money{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,.28);
+    background: rgba(59,130,246,.12);
+    font-weight: 900;
+    color: rgba(229,231,235,.95);
+  }
+
+  .inline-form{
+    display:flex;
+    gap:8px;
+    align-items:center;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+  }
+  .inline-form .field input{
+    width: 120px;
+    padding:10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.22);
+    color: rgba(229,231,235,.92);
+    outline:none;
+  }
+  .inline-form .field input:focus{
+    border-color: rgba(59,130,246,.50);
+    box-shadow: 0 0 0 4px rgba(59,130,246,.14);
+  }
+
+  .empty{
+    padding: 18px 12px;
+    text-align:center;
+    color: rgba(229,231,235,.70);
+  }
+
+  @media (max-width: 900px){
+    .num, .actions-col{ text-align:left; }
+    .inline-form{ justify-content:flex-start; }
+    .inline-form .field input{ width: 100%; min-width: 180px; }
+    .search-row .btn, .search-row a.btn{ width:auto; }
+  }
+</style>
+
 {% endblock %}
