@@ -1,19 +1,142 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Mahsulot qo'shish</h2>
-<form method="post">
-    <label>Nomi</label>
-    <input type="text" name="name" required>
 
-    <label>Miqdor (dona)</label>
-    <input type="number" name="qty" required>
+<div class="page-head">
+  <div>
+    <h2 class="title">Mahsulot qo‘shish</h2>
+    <p class="subtitle">Optovik narx USD’da kiritiladi, tizim avtomatik hisoblaydi</p>
+  </div>
 
-    <label>Optovik narx (USD)</label>
-    <input type="text" name="cost_price_usd" required>
+  <div class="head-actions">
+    <a class="btn btn-secondary" href="{{ url_for('products') }}">← Omborga qaytish</a>
+  </div>
+</div>
 
-    <label>Sotuv narxi (so'm)</label>
-    <input type="text" name="suggest_price" required>
+<div class="card">
+  <form method="post" class="form-grid" autocomplete="off">
 
-    <button class="btn" type="submit">Saqlash</button>
-</form>
+    <div class="form-group">
+      <label>Nomi</label>
+      <input type="text" name="name" placeholder="Masalan: Tomat pastasi 430g" required>
+    </div>
+
+    <div class="form-group">
+      <label>Miqdor (dona)</label>
+      <input type="number" name="qty" min="1" step="1" placeholder="100" required>
+    </div>
+
+    <div class="form-group">
+      <label>Optovik narx (USD)</label>
+      <div class="input-affix">
+        <input
+          type="text"
+          name="cost_price_usd"
+          placeholder="Masalan: 1.25"
+          required
+        >
+        <span class="affix">$</span>
+      </div>
+      <div class="hint">
+        USD narxdan so‘mga avtomatik o‘giriladi (joriy kurs bo‘yicha)
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Sotuv narxi (so‘m)</label>
+      <div class="input-affix">
+        <input
+          type="text"
+          name="suggest_price"
+          placeholder="Masalan: 18 000"
+          required
+        >
+        <span class="affix">so‘m</span>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn" type="submit">💾 Saqlash</button>
+      <a class="btn btn-secondary" href="{{ url_for('products') }}">Bekor qilish</a>
+    </div>
+
+  </form>
+</div>
+
+<style>
+  /* Products-add premium styles */
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{
+    margin:0 0 6px 0;
+    font-size:24px;
+    letter-spacing:.2px;
+  }
+  .subtitle{
+    margin:0;
+    color: rgba(229,231,235,.72);
+    font-size:14px;
+  }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 18px;
+  }
+
+  .form-grid{
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap:16px;
+  }
+
+  .form-group label{
+    display:block;
+    font-size:13px;
+    color: rgba(229,231,235,.70);
+    margin-bottom:6px;
+    font-weight:700;
+  }
+
+  .input-affix{
+    position:relative;
+  }
+  .input-affix input{
+    padding-right: 56px;
+  }
+  .affix{
+    position:absolute;
+    top:50%;
+    right:12px;
+    transform: translateY(-50%);
+    font-size:13px;
+    color: rgba(229,231,235,.65);
+    pointer-events:none;
+    font-weight:800;
+  }
+
+  .hint{
+    margin-top:6px;
+    font-size:12px;
+    color: rgba(229,231,235,.55);
+    line-height:1.45;
+  }
+
+  .form-actions{
+    grid-column: 1 / -1;
+    display:flex;
+    gap:10px;
+    margin-top:10px;
+  }
+
+  @media (max-width: 720px){
+    .form-grid{ grid-template-columns: 1fr; }
+  }
+</style>
+
 {% endblock %}
