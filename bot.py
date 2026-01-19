@@ -280,115 +280,246 @@ def _measure_text(draw, text, font):
 # ---------------------------
 # Robust receipt image generator
 # ---------------------------
+def format_som_plain(v: int) -> str:
+    try:
+        return f"{int(v):,}".replace(",", " ")
+    except Exception:
+        return str(v)
+
+def _wrap_text(draw, text, font, max_width):
+    words = (text or "").split()
+    if not words:
+        return [""]
+    lines, cur = [], ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        tw, _ = _measure_text(draw, test, font)
+        if tw <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
 def receipt_image_bytes(sale_id):
-    """
-    Katta shriftli chek dizayni:
-    - Shriftlar kattaroq (42 / 34 / 28 pt)
-    - Matn markazda
-    - QR kodi pastda
-    - Oq fon
-    """
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT s.id, s.total_amount, s.payment_type, s.created_at, 
-               c.name AS cust_name, c.phone AS cust_phone
-        FROM sales s 
-        LEFT JOIN customers c ON s.customer_id = c.id 
-        WHERE s.id = %s;
-    """, (sale_id,))
-    s = cur.fetchone()
 
     cur.execute("""
-        SELECT name, qty, price, total 
-        FROM sale_items 
+        SELECT s.id, s.total_amount, s.payment_type, s.created_at,
+               c.name AS cust_name, c.phone AS cust_phone
+        FROM sales s
+        LEFT JOIN customers c ON s.customer_id = c.id
+        WHERE s.id = %s;
+    """, (sale_id,))
+    sale = cur.fetchone()
+
+    cur.execute("""
+        SELECT name, qty, price, total
+        FROM sale_items
         WHERE sale_id = %s
         ORDER BY id;
     """, (sale_id,))
     items = cur.fetchall()
+
     cur.close()
     conn.close()
 
-    if not s:
-        raise ValueError(f"Sotuv topilmadi: sale_id={sale_id}")
+    if not sale:
+        return None
 
-    from_zone = ZoneInfo(TIMEZONE)
-    created_local = s.get("created_at")
-    if isinstance(created_local, datetime):
-        try:
-            created_local = created_local.astimezone(from_zone)
-        except Exception:
-            created_local = created_local + timedelta(hours=5)
+    created = sale.get("created_at")
+    if isinstance(created, datetime):
+        created_local = created + timedelta(hours=5)
     else:
         created_local = datetime.utcnow() + timedelta(hours=5)
 
-    # 📏 Katta shriftlar
-    title_font = _get_font(42)
-    body_font = _get_font(34)
-    small_font = _get_font(28)
+    # 80mm thermal: 576px width (printer-friendly)
+    W = 576
+    P = 22
+    GAP = 8
+
+    font_brand = _get_font(34)
+    font_title = _get_font(26)
+    font_bold = _get_font(22)
+    font = _get_font(20)
+    font_small = _get_font(18)
+
+    temp = Image.new("RGB", (W, 10), "white")
+    d = ImageDraw.Draw(temp)
+
+    # columns (ITEM | QTY | PRICE | TOTAL)
+    col_name_w = W - (P * 2) - 240
+    col_qty_w = 60
+    col_price_w = 90
+    col_total_w = 90
 
     seller_display = f"{SELLER_NAME} ({SELLER_PHONE})" if SELLER_NAME else f"{SELLER_PHONE}"
+    cust_line = f"{sale.get('cust_name') or '-'} {sale.get('cust_phone') or ''}".strip()
 
-    # 📄 Matnlar
-    lines = [
-        "🧾 CHEK",
-        f"Sana: {created_local.strftime('%d.%m.%Y %H:%M:%S')}",
-        f"Mijoz: {s.get('cust_name') or '-'} {s.get('cust_phone') or ''}",
-        f"Do‘kon: {STORE_LOCATION_NAME}",
-        "────────────────────────────",
-    ]
+    total_amount = int(sale.get("total_amount") or 0)
+    pay_type = (sale.get("payment_type") or "-").upper()
+
+    blocks = []
+    blocks.append(("center", "SRM", font_brand))
+    blocks.append(("center", "SALES RECEIPT", font_title))
+    blocks.append(("hr", "", None))
+
+    blocks.append(("kv", ("Chek ID", f"#{sale_id}", font)))
+    blocks.append(("kv", ("Sana", created_local.strftime("%d.%m.%Y %H:%M"), font)))
+    blocks.append(("kv", ("To'lov", pay_type, font_bold)))
+    blocks.append(("kv", ("Sotuvchi", seller_display, font_small)))
+    blocks.append(("kv", ("Mijoz", cust_line, font_small)))
+
+    blocks.append(("hr", "", None))
+    blocks.append(("table_head", "", None))
 
     for it in items:
-        name = str(it.get("name") or "")
+        name = str(it.get("name") or "").strip()
         qty = int(it.get("qty") or 0)
-        price = it.get("price") or 0
-        total = it.get("total") or 0
-        lines.append(f"{name} — {qty} x {format_money(price)} = {format_money(total)}")
+        price = int(it.get("price") or 0)
+        total = int(it.get("total") or (qty * price))
 
-    lines.append("────────────────────────────")
-    lines.append(f"💰 Jami: {format_money(s.get('total_amount') or 0)}")
-    lines.append(f"💳 To‘lov turi: {s.get('payment_type') or '-'}")
-    lines.append(f"👨‍💼 Sotuvchi: {seller_display}")
-    lines.append("────────────────────────────")
-    lines.append("Tashrifingiz uchun rahmat! ❤️")
+        name_lines = _wrap_text(d, name, font, col_name_w)
+        blocks.append(("row", {
+            "name": name_lines[0],
+            "qty": str(qty),
+            "price": format_som_plain(price),
+            "total": format_som_plain(total),
+            "font": font
+        }))
+        for extra in name_lines[1:]:
+            blocks.append(("row_sub", {"name": extra, "font": font}))
 
-    # 📏 Hajmni hisoblash
-    temp_img = Image.new("RGB", (10, 10))
-    draw_temp = ImageDraw.Draw(temp_img)
-    widths, heights = [], []
-    for ln in lines:
-        w, h = _measure_text(draw_temp, ln, body_font)
-        widths.append(w)
-        heights.append(h)
+    blocks.append(("hr", "", None))
+    blocks.append(("sum", ("JAMI", f"{format_som_plain(total_amount)} so'm", font_brand)))
+    blocks.append(("hr", "", None))
+    blocks.append(("center_small", "Tashrifingiz uchun rahmat!", font_small))
 
-    max_w = max(widths) + 80
-    total_h = sum(h + 20 for h in heights) + 260  # satrlar oralig‘i kattaroq
-    img_w = min(max(480, max_w), 700)
-    img_h = max(700, total_h)
+    # ---- height calc ----
+    tmp = Image.new("RGB", (W, 10), "white")
+    draw_tmp = ImageDraw.Draw(tmp)
 
-    img = Image.new("RGB", (img_w, img_h), "white")
+    H = P
+    def add_h(text, fnt, extra=GAP):
+        nonlocal H
+        _, hh = _measure_text(draw_tmp, text, fnt)
+        H += hh + extra
+
+    for kind, payload, fnt in blocks:
+        if kind in ("center", "center_small"):
+            add_h(payload, fnt, GAP)
+        elif kind == "hr":
+            H += 18
+        elif kind == "kv":
+            k, v, ff = payload
+            add_h(f"{k}: {v}", ff, 6)
+        elif kind == "table_head":
+            H += 36
+        elif kind in ("row", "row_sub"):
+            add_h(payload["name"], payload.get("font", font), 6)
+        elif kind == "sum":
+            k, v, ff = payload
+            add_h(f"{k} {v}", ff, 10)
+
+    qr_size = 180
+    H += qr_size + 30 + P
+    H = max(720, H)
+
+    img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
-    # 🧾 Matnni o‘rtada chizish
-    y = 50
-    for ln in lines:
-        font_used = title_font if "CHEK" in ln else body_font
-        w, h = _measure_text(draw, ln, font_used)
-        x = (img_w - w) // 2
-        draw.text((x, y), ln, font=font_used, fill="black")
-        y += h + 20
+    y = P
 
-    # 🔲 QR kodi pastda markazda
+    def hr():
+        nonlocal y
+        y += 6
+        draw.line((P, y, W - P, y), fill=(0, 0, 0), width=2)
+        y += 12
+
+    def center(text, fnt):
+        nonlocal y
+        tw, th = _measure_text(draw, text, fnt)
+        draw.text(((W - tw) // 2, y), text, font=fnt, fill="black")
+        y += th + GAP
+
+    def kv(k, v, fnt):
+        nonlocal y
+        left = f"{k}:"
+        draw.text((P, y), left, font=fnt, fill="black")
+        vw, vh = _measure_text(draw, str(v), fnt)
+        draw.text((W - P - vw, y), str(v), font=fnt, fill="black")
+        _, lh = _measure_text(draw, left, fnt)
+        y += max(lh, vh) + 6
+
+    def table_head():
+        nonlocal y
+        draw.text((P, y), "ITEM", font=font_bold, fill="black")
+        draw.text((P + col_name_w + 10, y), "QTY", font=font_bold, fill="black")
+        draw.text((P + col_name_w + 10 + col_qty_w, y), "PRICE", font=font_bold, fill="black")
+        draw.text((W - P - col_total_w + 10, y), "TOTAL", font=font_bold, fill="black")
+        y += 26
+        draw.line((P, y, W - P, y), fill=(0, 0, 0), width=1)
+        y += 10
+
+    def row(name, qty=None, price=None, total=None, fnt=font):
+        nonlocal y
+        draw.text((P, y), name, font=fnt, fill="black")
+
+        if qty is not None:
+            qw, _ = _measure_text(draw, str(qty), fnt)
+            draw.text((P + col_name_w + 10 + (col_qty_w - qw) // 2, y), str(qty), font=fnt, fill="black")
+
+        if price is not None:
+            pw, _ = _measure_text(draw, str(price), fnt)
+            draw.text((P + col_name_w + 10 + col_qty_w + (col_price_w - pw), y), str(price), font=fnt, fill="black")
+
+        if total is not None:
+            tw, _ = _measure_text(draw, str(total), fnt)
+            draw.text((W - P - tw, y), str(total), font=fnt, fill="black")
+
+        _, nh = _measure_text(draw, name, fnt)
+        y += nh + 6
+
+    def sum_line(label, value, fnt):
+        nonlocal y
+        draw.text((P, y), label, font=fnt, fill="black")
+        vw, vh = _measure_text(draw, value, fnt)
+        draw.text((W - P - vw, y), value, font=fnt, fill="black")
+        _, lh = _measure_text(draw, label, fnt)
+        y += max(lh, vh) + 10
+
+    for kind, payload, fnt in blocks:
+        if kind == "center":
+            center(payload, fnt)
+        elif kind == "center_small":
+            center(payload, fnt)
+        elif kind == "hr":
+            hr()
+        elif kind == "kv":
+            k, v, ff = payload
+            kv(k, v, ff)
+        elif kind == "table_head":
+            table_head()
+        elif kind == "row":
+            row(payload["name"], payload["qty"], payload["price"], payload["total"], payload.get("font", font))
+        elif kind == "row_sub":
+            row(payload["name"], None, None, None, payload.get("font", font))
+        elif kind == "sum":
+            k, v, ff = payload
+            sum_line(k, v, ff)
+
+    # QR
     try:
-        qr_payload = f"sale:{sale_id};total:{s.get('total_amount')}"
-        qr = qrcode.make(qr_payload)
-        qr_size = 200
-        qr = qr.resize((qr_size, qr_size))
-        qr_x = (img_w - qr_size) // 2
-        qr_y = img_h - qr_size - 40
-        img.paste(qr, (qr_x, qr_y))
-    except Exception as e:
-        print("QR xatosi:", e)
+        import qrcode
+        qr_payload = f"SRM|sale:{sale_id}|total:{total_amount}|time:{created_local.strftime('%Y-%m-%d %H:%M')}"
+        qr = qrcode.make(qr_payload).resize((qr_size, qr_size))
+        img.paste(qr, ((W - qr_size) // 2, H - qr_size - P - 10))
+    except Exception:
+        pass
 
     buf = io.BytesIO()
     buf.name = f"receipt_{sale_id}.png"
