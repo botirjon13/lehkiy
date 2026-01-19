@@ -1,30 +1,5 @@
-CREATE TABLE IF NOT EXISTS products (
-  id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL,      -- name in latin
-  qty INTEGER NOT NULL DEFAULT 0,
-  cost_price BIGINT NOT NULL,    -- optovik narxi (so'm)
-  cost_price_usd NUMERIC(12,2), -- optovik narxi (USD)
-  suggest_price BIGINT,    -- taxminiy sotish narxi (so'm)
-  created_at TIMESTAMP DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS customers (
-  id SERIAL PRIMARY KEY,
-  name TEXT,
-  phone TEXT,
-  created_at TIMESTAMP DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS sales (
-  id SERIAL PRIMARY KEY,
-  customer_id INTEGER REFERENCES customers(id),
-  total_amount BIGINT NOT NULL,
-  payment_type TEXT, -- 'naqd' or 'qarz'
-  seller_phone TEXT,
-  created_at TIMESTAMP DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS sale_items (
+@@ -28,25 +28,34 @@ 
+  CREATE TABLE IF NOT EXISTS sale_items (
   id SERIAL PRIMARY KEY,
   sale_id INTEGER REFERENCES sales(id),
   product_id INTEGER REFERENCES products(id),
@@ -50,3 +25,12 @@ CREATE TABLE IF NOT EXISTS user_carts (
 
 ALTER TABLE products
 ADD COLUMN IF NOT EXISTS usd_rate NUMERIC(12,2);
+
+CREATE TABLE IF NOT EXISTS web_users (
+  id SERIAL PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'seller',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT now()
+);
