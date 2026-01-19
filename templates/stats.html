@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Statistika</h2>
+<div class="grid">
+    <div>
+        <h3>Kunlik</h3>
+        <a class="btn" href="{{ url_for('stats_report', period='daily') }}">Excel yuklash</a>
+    </div>
+    <div>
+        <h3>Oylik</h3>
+        <a class="btn" href="{{ url_for('stats_report', period='monthly') }}">Excel yuklash</a>
+    </div>
+    <div>
+        <h3>Yillik</h3>
+        <a class="btn" href="{{ url_for('stats_report', period='yearly') }}">Excel yuklash</a>
+    </div>
+</div>
+
+<h3>Sotuv ID bo'yicha hisobot</h3>
+<form method="post" action="{{ url_for('stats_sale_report') }}">
+    <label>Sotuv ID</label>
+    <input type="text" name="sale_id" required>
+    <button class="btn" type="submit">Excel olish</button>
+</form>
+{% endblock %}
