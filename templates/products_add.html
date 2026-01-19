@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Mahsulot qo'shish</h2>
+<form method="post">
+    <label>Nomi</label>
+    <input type="text" name="name" required>
+
+    <label>Miqdor (dona)</label>
+    <input type="number" name="qty" required>
+
+    <label>Optovik narx (USD)</label>
+    <input type="text" name="cost_price_usd" required>
+
+    <label>Sotuv narxi (so'm)</label>
+    <input type="text" name="suggest_price" required>
+
+    <button class="btn" type="submit">Saqlash</button>
+</form>
+{% endblock %}
