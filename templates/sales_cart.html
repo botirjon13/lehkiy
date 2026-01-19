@@ -1,29 +1,183 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Savatcha</h2>
-<table>
-    <thead>
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Savatcha</h2>
+    <p class="subtitle">Tanlangan mahsulotlar va checkout</p>
+  </div>
+
+  <div class="head-actions">
+    <a class="btn btn-secondary" href="{{ url_for('sales_new') }}">+ Yana mahsulot</a>
+    <a class="btn" href="{{ url_for('sales_checkout') }}">Checkout →</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
         <tr>
-            <th>Nomi</th>
-            <th>Miqdor</th>
-            <th>Narx</th>
-            <th>Jami</th>
-            <th>Amal</th>
+          <th>Mahsulot</th>
+          <th class="num">Miqdor</th>
+          <th class="num">Narx</th>
+          <th class="num">Jami</th>
+          <th class="actions-col">Amal</th>
         </tr>
-    </thead>
-    <tbody>
-    {% for item in cart %}
+      </thead>
+      <tbody>
+      {% if cart %}
+        {% for item in cart %}
+          <tr>
+            <td>
+              <div class="cell-title">{{ item.name }}</div>
+              <div class="cell-sub">ID: {{ item.product_id if item.product_id is defined else '-' }}</div>
+            </td>
+            <td class="num">
+              <span class="pill">{{ item.qty }}</span>
+            </td>
+            <td class="num">
+              <span class="muted">{{ item.price }}</span>
+            </td>
+            <td class="num">
+              <span class="money">{{ item.qty * item.price }}</span>
+            </td>
+            <td class="actions-col">
+              <a class="btn btn-danger" href="{{ url_for('sales_cart_remove', index=loop.index0) }}">O‘chirish</a>
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
         <tr>
-            <td>{{ item.name }}</td>
-            <td>{{ item.qty }}</td>
-            <td>{{ item.price }}</td>
-            <td>{{ item.qty * item.price }}</td>
-            <td><a class="btn btn-danger" href="{{ url_for('sales_cart_remove', index=loop.index0) }}">O'chirish</a></td>
+          <td colspan="5" class="empty">
+            Savatcha bo‘sh. Mahsulot qo‘shish uchun “Yana mahsulot” tugmasini bosing.
+          </td>
         </tr>
-    {% endfor %}
-    </tbody>
-</table>
-<p><strong>Umumiy: {{ total }}</strong></p>
-<a class="btn" href="{{ url_for('sales_checkout') }}">Checkout</a>
-<a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yana mahsulot</a>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="summary">
+  <div class="sum-card">
+    <div class="sum-label">Umumiy summa</div>
+    <div class="sum-value">{{ total }}</div>
+  </div>
+
+  <div class="sum-actions">
+    <a class="btn" href="{{ url_for('sales_checkout') }}">Checkout →</a>
+    <a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yana mahsulot</a>
+  </div>
+</div>
+
+<style>
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{ margin:0 0 6px 0; font-size:24px; letter-spacing:.2px; }
+  .subtitle{ margin:0; color: rgba(229,231,235,.72); font-size:14px; }
+  .head-actions{ display:flex; gap:10px; flex-wrap:wrap; }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 12px;
+  }
+
+  .num{ text-align:right; white-space:nowrap; }
+  .actions-col{ text-align:right; width:1%; white-space:nowrap; }
+
+  .cell-title{
+    font-weight:900;
+    color: rgba(229,231,235,.95);
+  }
+  .cell-sub{
+    margin-top:4px;
+    font-size:12px;
+    color: rgba(229,231,235,.55);
+  }
+
+  .pill{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(229,231,235,.92);
+    min-width: 40px;
+    justify-content: center;
+  }
+
+  .money{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,.28);
+    background: rgba(59,130,246,.12);
+    font-weight: 900;
+    color: rgba(229,231,235,.95);
+  }
+
+  .muted{ color: rgba(229,231,235,.70); }
+
+  .empty{
+    padding: 18px 12px;
+    text-align:center;
+    color: rgba(229,231,235,.70);
+  }
+
+  .summary{
+    margin-top: 14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+
+  .sum-card{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    min-width: 260px;
+  }
+  .sum-label{
+    font-size:12px;
+    color: rgba(229,231,235,.65);
+    font-weight:800;
+  }
+  .sum-value{
+    font-size:20px;
+    font-weight:1000;
+    color: rgba(229,231,235,.95);
+    letter-spacing:.2px;
+  }
+
+  .sum-actions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  @media (max-width: 720px){
+    .num, .actions-col{ text-align:left; }
+    .summary{ flex-direction:column; align-items:stretch; }
+    .sum-card{ width:100%; }
+    .sum-actions{ width:100%; }
+    .sum-actions .btn{ width:100%; text-align:center; }
+  }
+</style>
+
 {% endblock %}
