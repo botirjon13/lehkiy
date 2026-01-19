@@ -1,25 +1,261 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Statistika</h2>
-<div class="grid">
-    <div>
-        <h3>Kunlik</h3>
-        <a class="btn" href="{{ url_for('stats_report', period='daily') }}">Excel yuklash</a>
-    </div>
-    <div>
-        <h3>Oylik</h3>
-        <a class="btn" href="{{ url_for('stats_report', period='monthly') }}">Excel yuklash</a>
-    </div>
-    <div>
-        <h3>Yillik</h3>
-        <a class="btn" href="{{ url_for('stats_report', period='yearly') }}">Excel yuklash</a>
-    </div>
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Statistika</h2>
+    <p class="subtitle">Hisobotlarni Excel formatida yuklab oling yoki sotuv ID bo‘yicha chek hisobotini oling</p>
+  </div>
 </div>
 
-<h3>Sotuv ID bo'yicha hisobot</h3>
-<form method="post" action="{{ url_for('stats_sale_report') }}">
-    <label>Sotuv ID</label>
-    <input type="text" name="sale_id" required>
-    <button class="btn" type="submit">Excel olish</button>
-</form>
+<div class="cards">
+  <a class="report-card" href="{{ url_for('stats_report', period='daily') }}">
+    <div class="rc-top">
+      <span class="badge">DAILY</span>
+      <span class="hint">Excel</span>
+    </div>
+    <div class="rc-title">Kunlik hisobot</div>
+    <div class="rc-sub">Bugungi kun bo‘yicha sotuvlar, foyda va jami ko‘rsatkichlar.</div>
+    <div class="rc-cta">
+      <span class="btn btn-secondary">Excel yuklash</span>
+      <span class="arrow">→</span>
+    </div>
+  </a>
+
+  <a class="report-card" href="{{ url_for('stats_report', period='monthly') }}">
+    <div class="rc-top">
+      <span class="badge">MONTHLY</span>
+      <span class="hint">Excel</span>
+    </div>
+    <div class="rc-title">Oylik hisobot</div>
+    <div class="rc-sub">Joriy oy bo‘yicha umumiy sotuv va foyda statistikasi.</div>
+    <div class="rc-cta">
+      <span class="btn btn-secondary">Excel yuklash</span>
+      <span class="arrow">→</span>
+    </div>
+  </a>
+
+  <a class="report-card" href="{{ url_for('stats_report', period='yearly') }}">
+    <div class="rc-top">
+      <span class="badge">YEARLY</span>
+      <span class="hint">Excel</span>
+    </div>
+    <div class="rc-title">Yillik hisobot</div>
+    <div class="rc-sub">Joriy yil bo‘yicha sotuv dinamikasi va yakuniy natijalar.</div>
+    <div class="rc-cta">
+      <span class="btn btn-secondary">Excel yuklash</span>
+      <span class="arrow">→</span>
+    </div>
+  </a>
+</div>
+
+<div class="split">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-title">Sotuv ID bo‘yicha hisobot</div>
+        <div class="card-sub">Chek raqamini kiriting va Excel faylni oling</div>
+      </div>
+      <div class="mini-pill">Quick report</div>
+    </div>
+
+    <form method="post" action="{{ url_for('stats_sale_report') }}" class="id-form">
+      <div class="field">
+        <label>Sotuv ID</label>
+        <input type="text" name="sale_id" placeholder="Masalan: 125" required>
+      </div>
+      <button class="btn" type="submit">Excel olish</button>
+    </form>
+
+    <div class="note">
+      Eslatma: agar ID topilmasa, tizim xabar chiqaradi. ID faqat raqam bo‘lishi kerak.
+    </div>
+  </div>
+
+  <div class="card soft">
+    <div class="card-title">Tavsiyalar</div>
+    <ul class="tips">
+      <li>Kunlik hisobot — kassani yopishda qulay.</li>
+      <li>Oylik hisobot — reja va tahlil uchun.</li>
+      <li>Yillik hisobot — umumiy natijani baholash.</li>
+      <li>ID bo‘yicha — aniq bitta sotuv/chekni ajratib olish.</li>
+    </ul>
+  </div>
+</div>
+
+<style>
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{ margin:0 0 6px 0; font-size:24px; letter-spacing:.2px; }
+  .subtitle{ margin:0; color: rgba(229,231,235,.72); font-size:14px; }
+
+  .cards{
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap:14px;
+    margin-bottom:14px;
+  }
+
+  .report-card{
+    display:block;
+    text-decoration:none;
+    border-radius: 16px;
+    padding: 14px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    transition: transform .08s ease, border-color .08s ease, background .08s ease;
+  }
+  .report-card:hover{
+    transform: translateY(-1px);
+    border-color: rgba(59,130,246,.34);
+    background: rgba(59,130,246,.06);
+  }
+
+  .rc-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:10px;
+  }
+  .badge{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,.28);
+    background: rgba(59,130,246,.12);
+    color: rgba(229,231,235,.92);
+    font-weight: 950;
+    font-size: 12px;
+    letter-spacing:.06em;
+  }
+  .hint{
+    font-size:12px;
+    color: rgba(229,231,235,.55);
+  }
+
+  .rc-title{
+    font-weight: 950;
+    color: rgba(229,231,235,.95);
+    font-size: 16px;
+    margin-bottom: 6px;
+  }
+  .rc-sub{
+    color: rgba(229,231,235,.62);
+    font-size: 13px;
+    line-height: 1.45;
+    margin-bottom: 12px;
+    min-height: 38px;
+  }
+  .rc-cta{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+  }
+  .arrow{
+    color: rgba(229,231,235,.65);
+    font-weight: 950;
+  }
+
+  .split{
+    display:grid;
+    grid-template-columns: 1.3fr .9fr;
+    gap:14px;
+    align-items:start;
+  }
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 14px;
+  }
+  .soft{
+    background: rgba(255,255,255,.02);
+  }
+
+  .card-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:12px;
+    margin-bottom: 12px;
+  }
+  .card-title{
+    font-weight: 950;
+    color: rgba(229,231,235,.95);
+    margin-bottom: 4px;
+  }
+  .card-sub{
+    color: rgba(229,231,235,.62);
+    font-size: 13px;
+  }
+  .mini-pill{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.06);
+    color: rgba(229,231,235,.80);
+    font-weight: 900;
+    font-size: 12px;
+    white-space:nowrap;
+  }
+
+  .id-form{
+    display:flex;
+    gap:10px;
+    align-items:flex-end;
+    flex-wrap:wrap;
+  }
+  .field{
+    flex: 1;
+    min-width: 220px;
+  }
+  .field label{
+    display:block;
+    margin-bottom: 6px;
+    font-weight: 900;
+    color: rgba(229,231,235,.86);
+  }
+  .field input{
+    width:100%;
+    padding:10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.22);
+    color: rgba(229,231,235,.92);
+    outline:none;
+  }
+  .field input:focus{
+    border-color: rgba(59,130,246,.50);
+    box-shadow: 0 0 0 4px rgba(59,130,246,.14);
+  }
+
+  .note{
+    margin-top: 10px;
+    color: rgba(229,231,235,.55);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .tips{
+    margin: 8px 0 0 18px;
+    padding: 0;
+    color: rgba(229,231,235,.62);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .tips li{ margin-bottom: 6px; }
+
+  @media (max-width: 950px){
+    .cards{ grid-template-columns: 1fr; }
+    .split{ grid-template-columns: 1fr; }
+  }
+</style>
+
 {% endblock %}
