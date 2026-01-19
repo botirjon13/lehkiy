@@ -185,6 +185,14 @@ ALTER TABLE web_users
 ALTER TABLE web_users
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now();
 
+-- =========================
+-- FIX: sales.user_id nullable
+-- =========================
+
+ALTER TABLE sales
+  ALTER COLUMN user_id DROP NOT NULL;
+
+
 
 -- =========================
 -- INDEXES (SAFE)
