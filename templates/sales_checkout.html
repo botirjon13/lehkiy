@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Checkout</h2>
+<p>Umumiy summa: <strong>{{ total }}</strong></p>
+<form method="post">
+    <label>Mijoz turi</label>
+    <select name="customer_type" onchange="toggleCustomer()" id="customer_type">
+        <option value="existing">Mavjud mijoz</option>
+        <option value="new">Yangi mijoz</option>
+    </select>
+
+    <div id="existing_customer">
+        <label>Mijoz tanlang</label>
+        <select name="customer_id">
+            {% for c in customers %}
+            <option value="{{ c.id }}">{{ c.name }} - {{ c.phone }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div id="new_customer" style="display:none;">
+        <label>Ismi</label>
+        <input type="text" name="customer_name">
+        <label>Telefon</label>
+        <input type="text" name="customer_phone">
+    </div>
+
+    <label>To'lov turi</label>
+    <select name="payment_type">
+        <option value="naqd">Naqd</option>
+        <option value="qarz">Qarz</option>
+    </select>
+
+    <button class="btn" type="submit">Savdoni yakunlash</button>
+</form>
+
+<script>
+    function toggleCustomer() {
+        var type = document.getElementById('customer_type').value;
+        document.getElementById('existing_customer').style.display = type === 'existing' ? 'block' : 'none';
+        document.getElementById('new_customer').style.display = type === 'new' ? 'block' : 'none';
+    }
+</script>
+{% endblock %}
