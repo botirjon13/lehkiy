@@ -1,35 +1,66 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Sotuvchilar</h2>
-<form method="post">
-    <label>Login</label>
-    <input type="text" name="username" required>
-    <label>Parol</label>
-    <input type="text" name="password" required>
-    <button class="btn" type="submit">Yaratish</button>
-</form>
 
-<h3>Mavjud sotuvchilar</h3>
-<table>
-    <thead>
-        <tr>
-            <th>ID</th>
-            <th>Login</th>
-            <th>Rol</th>
-            <th>Holat</th>
-            <th>Yaratilgan</th>
-        </tr>
-    </thead>
-    <tbody>
-    {% for u in users %}
-        <tr>
-            <td>{{ u.id }}</td>
-            <td>{{ u.username }}</td>
-            <td>{{ u.role }}</td>
-            <td>{{ 'Faol' if u.is_active else 'To\'xtatilgan' }}</td>
-            <td>{{ u.created_at }}</td>
-        </tr>
-    {% endfor %}
-    </tbody>
-</table>
+<div class="page-header">
+    <h2>Sotuvchilar boshqaruvi</h2>
+    <p class="subtitle">Admin tomonidan sotuvchilarni yaratish va nazorat qilish</p>
+</div>
+
+<div class="card">
+    <h3>➕ Yangi sotuvchi yaratish</h3>
+
+    <form method="post" class="form-grid">
+        <div class="form-group">
+            <label>Login</label>
+            <input type="text" name="username" placeholder="login" required>
+        </div>
+
+        <div class="form-group">
+            <label>Parol</label>
+            <input type="text" name="password" placeholder="********" required>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn primary" type="submit">Yaratish</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3>👥 Mavjud sotuvchilar</h3>
+
+    <div class="table-wrapper">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Login</th>
+                    <th>Rol</th>
+                    <th>Holat</th>
+                    <th>Yaratilgan sana</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for u in users %}
+                <tr>
+                    <td>#{{ u.id }}</td>
+                    <td>{{ u.username }}</td>
+                    <td>
+                        <span class="badge {{ 'admin' if u.role == 'admin' else 'seller' }}">
+                            {{ u.role }}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="status {{ 'active' if u.is_active else 'inactive' }}">
+                            {{ 'Faol' if u.is_active else 'To‘xtatilgan' }}
+                        </span>
+                    </td>
+                    <td>{{ u.created_at.strftime('%d.%m.%Y %H:%M') if u.created_at }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 {% endblock %}
