@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Xush kelibsiz!</h2>
+<p>Foydalanuvchi: <strong>{{ user.username }}</strong> (<span class="tag">{{ user.role }}</span>)</p>
+<div class="grid">
+    <div>
+        <h3>Mahsulotlar</h3>
+        <p>Ombor va yangi mahsulot qo'shish.</p>
+        <a class="btn" href="{{ url_for('products') }}">Ombor</a>
+    </div>
+    <div>
+        <h3>Savdo</h3>
+        <p>Savatcha orqali sotuvni boshlash.</p>
+        <a class="btn" href="{{ url_for('sales_new') }}">Savdo boshlash</a>
+    </div>
+    <div>
+        <h3>Statistika</h3>
+        <p>Hisobotlar va sotuv ID qidirish.</p>
+        <a class="btn" href="{{ url_for('stats_home') }}">Statistika</a>
+    </div>
+    <div>
+        <h3>Qarzdorlar</h3>
+        <p>Qarzdorlar ro'yxatini ko'rish.</p>
+        <a class="btn" href="{{ url_for('debts') }}">Qarzdorlar</a>
+    </div>
+</div>
+{% endblock %}
