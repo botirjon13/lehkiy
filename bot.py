@@ -91,8 +91,17 @@ def get_conn():
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
-    sql = open("db_init.sql", "r", encoding="utf-8").read()
-    cur.execute(sql)
+    raw_sql = open("db_init.sql", "r", encoding="utf-8").read().splitlines()
+    filtered = []
+    for line in raw_sql:
+        stripped = line.strip()
+        if stripped.startswith(("@@", "diff --git", "---", "+++", "index ")):
+            continue
+        filtered.append(line)
+    sql = "\n".join(filtered)
+    statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
+    for stmt in statements:
+        cur.execute(stmt)
     conn.commit()
     cur.close()
     conn.close()
