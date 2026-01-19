@@ -91,17 +91,19 @@ def get_conn():
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
-    raw_sql = open("db_init.sql", "r", encoding="utf-8").read().splitlines()
+    with open("db_init.sql", "r", encoding="utf-8") as f:
+        sql = f.read()
+
+    # Agar db_init.sql patch bo'lib qolgan bo'lsa (diff qatorlari)
     filtered = []
-    for line in raw_sql:
+    for line in sql.splitlines():
         stripped = line.strip()
         if stripped.startswith(("@@", "diff --git", "---", "+++", "index ")):
             continue
         filtered.append(line)
     sql = "\n".join(filtered)
-    statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
-    for stmt in statements:
-        cur.execute(stmt)
+
+    cur.execute(sql)
     conn.commit()
     cur.close()
     conn.close()
