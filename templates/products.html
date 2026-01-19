@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Mahsulotlar</h2>
+<form method="get">
+    <input type="text" name="q" value="{{ search }}" placeholder="Qidiruv">
+    <button class="btn" type="submit">Qidirish</button>
+    <a class="btn btn-secondary" href="{{ url_for('products_add') }}">Qo'shish</a>
+    <a class="btn btn-secondary" href="{{ url_for('products_upload') }}">Excel yuklash</a>
+    <a class="btn" href="{{ url_for('stock_export') }}">Excel eksport</a>
+</form>
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Nomi</th>
+            <th>Miqdor</th>
+            <th>USD narx</th>
+            <th>So'm narx</th>
+            <th>Taklif narxi</th>
+            <th>Kiritilgan</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for p in products %}
+        <tr>
+            <td>{{ p.id }}</td>
+            <td>{{ p.name }}</td>
+            <td>{{ p.qty }}</td>
+            <td>{{ p.cost_price_usd }}</td>
+            <td>{{ p.cost_price }}</td>
+            <td>{{ p.suggest_price }}</td>
+            <td>{{ p.created_at }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
