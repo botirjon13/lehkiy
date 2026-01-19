@@ -1,7 +1,196 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Chek №{{ sale_id }}</h2>
-<pre style="white-space: pre-wrap; background: #f7f7f7; padding: 12px; border-radius: 6px;">{{ receipt_text }}</pre>
-<a class="btn" href="{{ url_for('sales_receipt_image', sale_id=sale_id) }}">Chek (PNG) yuklab olish</a>
-<a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yangi savdo</a>
+
+<div class="page-head">
+  <div>
+    <h2 class="title">Chek №{{ sale_id }}</h2>
+    <p class="subtitle">Chekni ko‘ring, PNG qilib yuklab oling yoki yangi savdoni boshlang</p>
+  </div>
+
+  <div class="head-actions">
+    <a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yangi savdo</a>
+    <a class="btn" href="{{ url_for('sales_receipt_image', sale_id=sale_id) }}">PNG yuklab olish</a>
+  </div>
+</div>
+
+<div class="receipt-grid">
+  <!-- Receipt -->
+  <div class="card receipt">
+    <div class="receipt-top">
+      <div class="badge">SRM • Receipt</div>
+      <div class="meta">
+        <div class="meta-row">
+          <span class="meta-k">Chek ID</span>
+          <span class="meta-v">#{{ sale_id }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-k">Format</span>
+          <span class="meta-v chip">TEXT / PNG</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="paper">
+      <pre class="paper-text">{{ receipt_text }}</pre>
+    </div>
+
+    <div class="receipt-actions">
+      <a class="btn" href="{{ url_for('sales_receipt_image', sale_id=sale_id) }}">Chekni PNG qilish</a>
+      <a class="btn btn-secondary" href="{{ url_for('sales_new') }}">Yangi savdo</a>
+    </div>
+  </div>
+
+  <!-- Tips / quick actions -->
+  <div class="card side">
+    <div class="side-title">Tezkor amallar</div>
+
+    <div class="side-box">
+      <div class="side-k">PNG</div>
+      <div class="side-v">Chek rasmini telefon orqali yuborish uchun qulay.</div>
+      <a class="btn btn-secondary w100" href="{{ url_for('sales_receipt_image', sale_id=sale_id) }}">PNG yuklab olish</a>
+    </div>
+
+    <div class="side-box">
+      <div class="side-k">Yangi savdo</div>
+      <div class="side-v">Keyingi mijoz uchun savdoni tez boshlang.</div>
+      <a class="btn w100" href="{{ url_for('sales_new') }}">Savdo boshlash</a>
+    </div>
+  </div>
+</div>
+
+<style>
+  .page-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:16px;
+  }
+  .title{ margin:0 0 6px 0; font-size:24px; letter-spacing:.2px; }
+  .subtitle{ margin:0; color: rgba(229,231,235,.72); font-size:14px; }
+  .head-actions{ display:flex; gap:10px; flex-wrap:wrap; }
+
+  .receipt-grid{
+    display:grid;
+    grid-template-columns: 1.3fr .9fr;
+    gap:14px;
+    align-items:start;
+  }
+
+  .card{
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 16px;
+    padding: 14px;
+  }
+
+  .receipt-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:12px;
+    margin-bottom:12px;
+  }
+
+  .badge{
+    display:inline-flex;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,.28);
+    background: rgba(59,130,246,.12);
+    color: rgba(229,231,235,.92);
+    font-weight: 900;
+    font-size: 12px;
+    letter-spacing:.02em;
+    white-space:nowrap;
+  }
+
+  .meta{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    min-width: 180px;
+  }
+  .meta-row{
+    display:flex;
+    justify-content:space-between;
+    gap:10px;
+    font-size: 12px;
+    color: rgba(229,231,235,.70);
+  }
+  .meta-k{ color: rgba(229,231,235,.55); }
+  .meta-v{ color: rgba(229,231,235,.92); font-weight: 900; }
+
+  .chip{
+    display:inline-flex;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.06);
+    font-weight: 900;
+    letter-spacing:.04em;
+  }
+
+  .paper{
+    border-radius: 14px;
+    border: 1px dashed rgba(255,255,255,.14);
+    background: rgba(0,0,0,.22);
+    padding: 14px;
+    overflow:auto;
+  }
+  .paper-text{
+    margin:0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: rgba(229,231,235,.92);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .receipt-actions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top: 12px;
+  }
+
+  .side{
+    position: sticky;
+    top: 14px;
+  }
+  .side-title{
+    font-size:12px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color: rgba(229,231,235,.62);
+    font-weight: 950;
+    margin-bottom: 10px;
+  }
+  .side-box{
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.02);
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .side-k{
+    font-weight: 950;
+    color: rgba(229,231,235,.92);
+    margin-bottom: 6px;
+  }
+  .side-v{
+    color: rgba(229,231,235,.60);
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .w100{ width:100%; text-align:center; display:inline-block; }
+
+  @media (max-width: 900px){
+    .receipt-grid{ grid-template-columns: 1fr; }
+    .side{ position: static; }
+  }
+</style>
+
 {% endblock %}
