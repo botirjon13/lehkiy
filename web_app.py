@@ -907,7 +907,12 @@ def sales_receipt_image(sale_id):
     buf = receipt_image_bytes(sale_id)
     if not buf:
         abort(404)
-    return send_file(buf, mimetype="image/png", download_name=f"receipt_{sale_id}.png")
+    return send_file(
+        buf,
+        mimetype="image/png",
+        as_attachment=True,                       # ✅ shu eng muhim
+        download_name=f"receipt_{sale_id}.png"     # filename
+    )
 
 
 @app.route("/stats")
