@@ -51,21 +51,24 @@
     }
 
     .brand{
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      gap:10px;
-      margin-bottom: 14px;
-      user-select:none;
-    }
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  margin-bottom: 14px;
+  user-select:none;
+
+  flex-direction: column;     /* ✅ logo yuqorida, form pastda bo‘lsin */
+  margin-top: 18px;           /* ✅ tepaga yopishib qolmasin */
+}
 
     /* ==== TO‘G‘RILANGAN JOY (LOGO) ==== */
     .brand-badge{
-      width: 350px;
-      height: 350px;
-      display:grid;
-      place-items:center;
-    }
+  width: min(350px, 72vw);
+  height: min(350px, 72vw);
+  display:grid;
+  place-items:center;
+}
 
     .brand-badge img {
       width: 100%;
