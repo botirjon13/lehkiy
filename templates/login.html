@@ -58,16 +58,27 @@
       margin-bottom: 14px;
       user-select:none;
     }
+
+    /* ==== TO‘G‘RILANGAN JOY (LOGO) ==== */
     .brand-badge{
-      width: 40px; height: 40px;
+      width: 44px;
+      height: 44px;
       border-radius: 14px;
       background: linear-gradient(135deg, rgba(79,70,229,.95), rgba(16,185,129,.75));
       box-shadow: 0 12px 26px rgba(79,70,229,.25);
       display:grid;
       place-items:center;
-      font-weight: 900;
-      color: #fff;
+      overflow:hidden;
     }
+
+    .brand-badge img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    /* ============================= */
+
     .brand-title{
       font-weight: 900;
       letter-spacing: .2px;
@@ -196,12 +207,6 @@
       line-height: 1.45;
       text-align:center;
     }
-    .brand-badge img {
-  width: 100%;    /* Konteyner kengligiga moslashadi */
-  height: 100%;   /* Konteyner balandligiga moslashadi */
-  object-fit: contain; /* Surat shakli buzilmasligi uchun */
-  display: block;
-}
 
     @media (max-width: 420px){
       .card{ padding: 16px; }
@@ -213,9 +218,11 @@
 <body>
   <div class="wrap">
     <div class="brand">
-      <div>
-  <img src="templates/logo.png" alt="Logo">
-</div>
+      <!-- ==== TO‘G‘RILANGAN JOY (HTML) ==== -->
+      <div class="brand-badge">
+        <img src="/assets/logo.png" alt="Logo">
+      </div>
+      <!-- ================================ -->
       <div class="brand-title">SRM Do‘kon Paneli</div>
     </div>
 
@@ -236,14 +243,12 @@
       {% endwith %}
 
       <form method="post" autocomplete="on">
-        <!-- Hidden select kept for backend compatibility -->
         <label for="login_type">Kirish turi</label>
         <select name="login_type" id="login_type" onchange="toggleFields()">
           <option value="admin">Admin (Telegram ID)</option>
           <option value="seller">Sotuvchi (login/parol)</option>
         </select>
 
-        <!-- Premium segmented control (syncs with select) -->
         <div class="seg" role="tablist" aria-label="Kirish turi">
           <button type="button" id="seg_admin" class="active" onclick="setLoginType('admin')">Admin</button>
           <button type="button" id="seg_seller" onclick="setLoginType('seller')">Sotuvchi</button>
@@ -277,11 +282,9 @@
       document.getElementById('admin_fields').style.display = (type === 'admin') ? 'block' : 'none';
       document.getElementById('seller_fields').style.display = (type === 'seller') ? 'block' : 'none';
 
-      // segmented UI sync
       document.getElementById('seg_admin').classList.toggle('active', type === 'admin');
       document.getElementById('seg_seller').classList.toggle('active', type === 'seller');
 
-      // focus for better UX
       setTimeout(function(){
         if(type === 'admin') {
           document.getElementById('telegram_id').focus();
@@ -297,7 +300,6 @@
       toggleFields();
     }
 
-    // initial state
     toggleFields();
   </script>
 </body>
